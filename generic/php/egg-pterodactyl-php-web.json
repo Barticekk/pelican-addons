@@ -1,0 +1,184 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-11-02T21:28:04+00:00",
+    "name": "PHP Web (FrankenPHP)",
+    "author": "barticekk@barticekk.eu",
+    "description": "PHP website or Laravel app served by FrankenPHP, a single static binary with PHP and the Caddy web\nserver built in. Only the configured document root (public/ by default) is served. Composer, Laravel\nmigrations, the scheduler and a queue worker can run on start.",
+    "features": [],
+    "docker_images": {
+        "Debian": "ghcr.io/pelican-eggs/yolks:debian"
+    },
+    "file_denylist": [
+        "frankenphp"
+    ],
+    "startup": "if [ ! -f start.sh ]; then echo \"start.sh is missing: the installation did not finish. Reinstall the server and check the install output for the line starting with Install failed.\"; exit 1; fi; bash ./start.sh",
+    "config": {
+        "files": "{}",
+        "startup": "{\n    \"done\": \"FrankenPHP started\"\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# PHP Web (FrankenPHP) install script\n#\n# Server Files: /mnt/server\nset -e\ntrap 'echo \"Install failed at line ${LINENO}: ${BASH_COMMAND}\"' ERR\n\napt-get update\napt-get install -y --no-install-recommends curl ca-certificates git jq unzip\n\ncase \"$(uname -m)\" in\n    x86_64) ARCH=x86_64 ;;\n    aarch64) ARCH=aarch64 ;;\n    *) echo \"Unsupported architecture $(uname -m)\"; exit 1 ;;\nesac\n\nmkdir -p /mnt/server/www\ncd /mnt/server\n\n# FrankenPHP: the plain linux build is fully static (musl) and runs on any yolk\nif [ -z \"${FRANKENPHP_VERSION}\" ] || [ \"${FRANKENPHP_VERSION}\" == \"latest\" ]; then\n    RELEASE_URL=https://api.github.com/repos/php/frankenphp/releases/latest\nelse\n    RELEASE_URL=https://api.github.com/repos/php/frankenphp/releases/tags/v${FRANKENPHP_VERSION#v}\nfi\nDOWNLOAD_URL=$(curl -fsSL \"${RELEASE_URL}\" | jq -r --arg name \"frankenphp-linux-${ARCH}\" '.assets[] | select(.name == $name) | .browser_download_url')\nif [ -z \"${DOWNLOAD_URL}\" ]; then\n    DOWNLOAD_URL=https://github.com/php/frankenphp/releases/latest/download/frankenphp-linux-${ARCH}\nfi\necho \"Downloading ${DOWNLOAD_URL}\"\ncurl -fsSL -o frankenphp \"${DOWNLOAD_URL}\"\nchmod 755 frankenphp\n./frankenphp version\n\ncurl -fsSL -o composer.phar https://getcomposer.org/download/latest-stable/composer.phar\n\n# a regular \"php\" command for composer scripts, artisan and the console;\n# frankenphp php-cli does not understand -d, so leading ini overrides are dropped\nmkdir -p bin\ncat > bin/php <<'EOF'\n#!/bin/bash\nwhile [ $# -gt 0 ]; do\n    case \"$1\" in\n        -d) shift 2 ;;\n        -d*) shift ;;\n        *) break ;;\n    esac\ndone\nexec \"$(dirname \"$(readlink -f \"$0\")\")/../frankenphp\" php-cli \"$@\"\nEOF\nchmod 755 bin/php\nexport PATH=/mnt/server/bin:${PATH} PHP_BINARY=/mnt/server/bin/php\n\n# deploy from git when a repository is configured and www/ is still empty\nif [ -n \"${GIT_ADDRESS}\" ] && [ \"${USER_UPLOAD}\" != \"1\" ]; then\n    GIT_ARGS=()\n    if [ -n \"${USERNAME}\" ] && [ -n \"${ACCESS_TOKEN}\" ]; then\n        GIT_ARGS=(-c \"http.extraHeader=Authorization: Basic $(printf '%s:%s' \"${USERNAME}\" \"${ACCESS_TOKEN}\" | base64 -w0)\")\n    fi\n    if [ -z \"$(ls -A www)\" ]; then\n        echo \"Cloning ${GIT_ADDRESS}\"\n        git \"${GIT_ARGS[@]}\" clone ${BRANCH:+--branch \"${BRANCH}\"} --single-branch \"${GIT_ADDRESS}\" www\n    elif [ -d www/.git ]; then\n        echo \"www/ already contains a repository, pulling\"\n        git \"${GIT_ARGS[@]}\" -C www pull --ff-only\n    else\n        echo \"www/ is not empty and not a git repository, leaving it alone\"\n    fi\nfi\n\nif [ -z \"$(ls -A www)\" ]; then\n    mkdir -p \"www/${DOCUMENT_ROOT}\"\n    cat > \"www/${DOCUMENT_ROOT}/index.php\" <<'EOF'\n<!doctype html>\n<html lang=\"en\">\n<head><meta charset=\"utf-8\"><title>It works</title></head>\n<body><h1>It works</h1><p>Upload your site into <code>www/</code>.</p></body>\n</html>\nEOF\nfi\n\nif [ -f www/composer.json ]; then\n    echo \"Running composer install\"\n    (cd www && php ../composer.phar install --no-dev --optimize-autoloader --no-interaction --no-progress) \\\n        || echo \"composer install failed, it runs again on the next start\"\nfi\n\nif [ ! -f Caddyfile ]; then\n    cat > Caddyfile <<'EOF'\n{\n    admin off\n    auto_https off\n    persist_config off\n    skip_install_trust\n\n    servers {\n        trusted_proxies static private_ranges\n        client_ip_headers X-Forwarded-For X-Real-IP\n    }\n\n    frankenphp {\n        php_ini memory_limit {$PHP_MEMORY_LIMIT:256M}\n        php_ini upload_max_filesize {$PHP_UPLOAD_LIMIT:64M}\n        php_ini post_max_size {$PHP_UPLOAD_LIMIT:64M}\n        php_ini max_execution_time 60\n        php_ini expose_php Off\n        php_ini display_errors Off\n        php_ini log_errors On\n        php_ini allow_url_include Off\n        php_ini session.cookie_httponly 1\n        php_ini session.cookie_samesite Lax\n        php_ini session.use_strict_mode 1\n        php_ini session.cookie_secure {$SESSION_COOKIE_SECURE:1}\n        php_ini date.timezone {$TZ:UTC}\n    }\n}\n\n:{$SERVER_PORT} {\n    root * /home/container/www/{$DOCUMENT_ROOT}\n    encode zstd gzip\n\n    header {\n        X-Content-Type-Options \"nosniff\"\n        X-Frame-Options \"SAMEORIGIN\"\n        Referrer-Policy \"strict-origin-when-cross-origin\"\n        Permissions-Policy \"camera=(), microphone=(), geolocation=()\"\n        -Server\n        -X-Powered-By\n    }\n\n    @hidden {\n        path */.*\n        not path /.well-known/*\n    }\n    @sensitive path *.env *.ini *.log *.sql *.sqlite *.bak *.old *.orig *.swp *.dist *.lock *.yml *.yaml *.sh *.md composer.json package.json\n    respond @hidden 404\n    respond @sensitive 404\n\n    php_server\n}\nEOF\n    ./frankenphp fmt --overwrite Caddyfile\nfi\n\n# rewritten on every reinstall so fixes reach existing servers; put custom steps in www/ instead\ncat > start.sh <<'EOF'\n#!/bin/bash\ncd /home/container\nexport PATH=/home/container/bin:${PATH} PHP_BINARY=/home/container/bin/php\n\ngit_auth() {\n    if [ -n \"${USERNAME}\" ] && [ -n \"${ACCESS_TOKEN}\" ]; then\n        git -c \"http.extraHeader=Authorization: Basic $(printf '%s:%s' \"${USERNAME}\" \"${ACCESS_TOKEN}\" | base64 -w0)\" \"$@\"\n    else\n        git \"$@\"\n    fi\n}\n\nif [ \"${AUTO_UPDATE}\" == \"1\" ] && [ -d www/.git ]; then\n    echo \"Pulling latest changes\"\n    git_auth -C www pull --ff-only || echo \"git pull failed, starting with the current files\"\nfi\n\ncd www\nif [ \"${COMPOSER_INSTALL}\" == \"1\" ] && [ -f composer.json ]; then\n    php ../composer.phar install --no-dev --optimize-autoloader --no-interaction --no-progress\nfi\n\nif [ \"${LARAVEL}\" == \"1\" ] && [ -f artisan ]; then\n    if [ ! -f .env ]; then\n        echo \"www/.env is missing. Create it from .env.example before enabling Laravel mode.\"\n        exit 1\n    fi\n    if grep -qE '^APP_KEY=\\s*$' .env; then\n        php artisan key:generate --force\n    fi\n    php artisan migrate --force\n    php artisan optimize\n    if [ \"${LARAVEL_SCHEDULER}\" == \"1\" ]; then\n        php artisan schedule:work &\n    fi\n    if [ \"${LARAVEL_QUEUE}\" == \"1\" ]; then\n        php artisan queue:work --sleep=3 --tries=3 --max-time=3600 &\n    fi\nfi\ncd /home/container\n\nexec ./frankenphp run --config Caddyfile --adapter caddyfile\nEOF\nchmod 755 start.sh\n\necho \"-----------------------------------------\"\necho \"Installation completed\"\necho \"-----------------------------------------\"",
+            "container": "ghcr.io/pelican-eggs/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Document Root",
+            "description": "Folder inside www/ that is served to visitors. public for Laravel and most frameworks, . to serve www/ itself (WordPress).",
+            "env_variable": "DOCUMENT_ROOT",
+            "default_value": "public",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|regex:/^(\\.|[A-Za-z0-9_\\-]+(\\/[A-Za-z0-9_\\-]+)*)$/|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Git Repository",
+            "description": "Optional HTTPS URL of a repository cloned into www/ on install.",
+            "env_variable": "GIT_ADDRESS",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|url|starts_with:https://",
+            "field_type": "text"
+        },
+        {
+            "name": "Git Branch",
+            "description": "Branch to clone. Empty uses the default branch.",
+            "env_variable": "BRANCH",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Git Username",
+            "description": "For private repositories.",
+            "env_variable": "USERNAME",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Git Access Token",
+            "description": "Personal access token with read access. It is sent as a header and never written into .git/config.",
+            "env_variable": "ACCESS_TOKEN",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:255",
+            "field_type": "text"
+        },
+        {
+            "name": "Pull On Start",
+            "description": "git pull --ff-only before every start when www/ is a repository.",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Manual Upload",
+            "description": "Ignore the repository settings and manage www/ yourself over SFTP.",
+            "env_variable": "USER_UPLOAD",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Composer Install On Start",
+            "description": "Run composer install --no-dev on every start when www/composer.json exists.",
+            "env_variable": "COMPOSER_INSTALL",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Laravel",
+            "description": "Run artisan migrate --force and artisan optimize on start.",
+            "env_variable": "LARAVEL",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Laravel Scheduler",
+            "description": "Run artisan schedule:work in the background (needs Laravel enabled).",
+            "env_variable": "LARAVEL_SCHEDULER",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Laravel Queue Worker",
+            "description": "Run artisan queue:work in the background (needs Laravel enabled).",
+            "env_variable": "LARAVEL_QUEUE",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "PHP Memory Limit",
+            "description": "memory_limit, e.g. 256M.",
+            "env_variable": "PHP_MEMORY_LIMIT",
+            "default_value": "256M",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|regex:/^[0-9]+[KMG]$/",
+            "field_type": "text"
+        },
+        {
+            "name": "Upload Limit",
+            "description": "upload_max_filesize and post_max_size, e.g. 64M.",
+            "env_variable": "PHP_UPLOAD_LIMIT",
+            "default_value": "64M",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|regex:/^[0-9]+[KMG]$/",
+            "field_type": "text"
+        },
+        {
+            "name": "Secure Session Cookie",
+            "description": "Mark the PHP session cookie Secure. Keep 1 behind an HTTPS reverse proxy, set 0 only for testing over plain HTTP.",
+            "env_variable": "SESSION_COOKIE_SECURE",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "FrankenPHP Version",
+            "description": "latest or a release such as 1.13.4. Reinstall to change.",
+            "env_variable": "FRANKENPHP_VERSION",
+            "default_value": "latest",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:16",
+            "field_type": "text"
+        }
+    ]
+}

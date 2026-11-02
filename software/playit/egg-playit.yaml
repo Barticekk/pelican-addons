@@ -1,0 +1,107 @@
+_comment: 'DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PANEL'
+meta:
+  version: PLCN_v3
+  update_url: null
+exported_at: '2026-11-02T12:00:00+00:00'
+name: 'playit.gg Agent'
+author: barticekk@barticekk.eu
+uuid: 70b476e6-e340-4918-ac31-f375c69a0662
+description: |-
+  playit.gg tunnels game and app servers to the internet without a public IP or port forwarding.
+  Runs the official playit daemon; tunnels and their local targets are managed on playit.gg.
+icon: null
+tags:
+  - tunnel
+features: {  }
+docker_images:
+  Debian: 'ghcr.io/pelican-eggs/yolks:debian'
+file_denylist:
+  - playitd
+startup_commands:
+  Default: 'if [ -z "${SECRET_KEY}" ]; then echo "Set the Secret Key variable first, see the egg tutorial."; exit 1; fi; (umask 077; printf "%s" "${SECRET_KEY}" > .playit-secret); exec ./playitd --secret-path /home/container/.playit-secret --socket-path /tmp/playitd.sock'
+config:
+  files: {  }
+  startup:
+    done: 'Starting playitd'
+  logs: {  }
+  stop: ^C
+scripts:
+  installation:
+    script: |-
+      #!/bin/bash
+      # playit.gg agent install script
+      #
+      # Server Files: /mnt/server
+      # The daemon is published as a container image with a static binary, so it is copied out of
+      # the image layers with the registry API.
+      set -eo pipefail
+      trap 'echo "Install failed at line ${LINENO}: ${BASH_COMMAND}"' ERR
+
+      apt-get update
+      apt-get install -y --no-install-recommends curl ca-certificates jq tar gzip
+
+      case "$(uname -m)" in
+          x86_64) ARCH=amd64 ;;
+          aarch64) ARCH=arm64 ;;
+          *) echo "Unsupported architecture $(uname -m)"; exit 1 ;;
+      esac
+
+      REPO=playit-cloud/playit-agent
+      TAG=${PLAYIT_VERSION:-latest}
+      REGISTRY=https://ghcr.io/v2/${REPO}
+      ACCEPT="application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json"
+      TOKEN=$(curl -fsSL "https://ghcr.io/token?scope=repository:${REPO}:pull" | jq -r .token)
+
+      registry_get() {
+          curl -fsSL -H "Authorization: Bearer ${TOKEN}" -H "Accept: ${ACCEPT}" "$@"
+      }
+
+      echo "Resolving ghcr.io/${REPO}:${TAG} for linux/${ARCH}"
+      DIGEST=$(registry_get "${REGISTRY}/manifests/${TAG}" \
+          | jq -r --arg arch "${ARCH}" '.manifests[] | select(.platform.os == "linux" and .platform.architecture == $arch) | .digest' | head -n1)
+      if [ -z "${DIGEST}" ]; then
+          echo "No linux/${ARCH} image found for tag ${TAG}"
+          exit 1
+      fi
+
+      ROOTFS=$(mktemp -d)
+      for layer in $(registry_get "${REGISTRY}/manifests/${DIGEST}" | jq -r '.layers[].digest'); do
+          registry_get "${REGISTRY}/blobs/${layer}" | tar -xz -C "${ROOTFS}" --no-same-owner --exclude='dev/*' 2>/dev/null || true
+      done
+
+      if [ ! -f "${ROOTFS}/usr/local/bin/playitd" ]; then
+          echo "playitd was not found in the image"
+          exit 1
+      fi
+      install -m 755 "${ROOTFS}/usr/local/bin/playitd" /mnt/server/playitd
+      rm -rf "${ROOTFS}"
+
+      echo "-----------------------------------------"
+      echo "playit agent installed"
+      echo "-----------------------------------------"
+    container: 'ghcr.io/pelican-eggs/installers:debian'
+    entrypoint: bash
+variables:
+  -
+    sort: 1
+    name: 'Secret Key'
+    description: 'Agent secret from playit.gg (create an agent of type Docker). Keep it private.'
+    env_variable: SECRET_KEY
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - 'regex:/^[A-Za-z0-9]+$/'
+      - 'max:256'
+  -
+    sort: 2
+    name: 'Agent Version'
+    description: 'Image tag of ghcr.io/playit-cloud/playit-agent, latest by default. Reinstall to update.'
+    env_variable: PLAYIT_VERSION
+    default_value: latest
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'regex:/^[A-Za-z0-9._\-]+$/'

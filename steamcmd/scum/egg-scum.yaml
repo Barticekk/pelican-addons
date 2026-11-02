@@ -1,0 +1,232 @@
+_comment: 'DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PANEL'
+meta:
+  version: PLCN_v3
+  update_url: null
+exported_at: '2026-11-02T12:00:00+00:00'
+name: SCUM
+author: barticekk@barticekk.eu
+uuid: f96b02a3-2abd-4dc5-aef8-ebc0e8444f27
+description: |-
+  SCUM is an open world survival game with deep character customisation and a prison island setting.
+  The official dedicated server is Windows only and runs here under Wine. Players connect to the
+  game port + 2.
+icon: null
+tags:
+  - steamcmd
+  - wine
+features:
+  - steam_disk_space
+docker_images:
+  'Wine Staging': 'ghcr.io/pelican-eggs/yolks:wine_staging'
+  'Wine Latest': 'ghcr.io/pelican-eggs/yolks:wine_latest'
+file_denylist: {  }
+startup_commands:
+  Default: 'mkdir -p SCUM/Saved/Logs && touch SCUM/Saved/Logs/SCUM.log && wine ./SCUM/Binaries/Win64/SCUMServer.exe -Port={{SERVER_PORT}} -QueryPort={{QUERY_PORT}} -MaxPlayers={{MAX_PLAYERS}} $( [ "{{NO_BATTLEYE}}" == "1" ] && printf %s -nobattleye ) & tail -c0 -F ./SCUM/Saved/Logs/SCUM.log --pid=$!'
+config:
+  files:
+    SCUM/Saved/Config/WindowsServer/ServerSettings.ini:
+      parser: ini
+      find:
+        'General.[scum.ServerName]': '{{server.environment.SERVER_NAME}}'
+        'General.[scum.ServerDescription]': '{{server.environment.SERVER_DESCRIPTION}}'
+        'General.[scum.ServerPassword]': '{{server.environment.SERVER_PASSWORD}}'
+        'General.[scum.ServerPlaystyle]': '{{server.environment.SERVER_PLAYSTYLE}}'
+        'General.[scum.MaxPlayers]': '{{server.environment.MAX_PLAYERS}}'
+  startup:
+    done: 'Config entry: GameID scum'
+  logs: {  }
+  stop: ^C
+scripts:
+  installation:
+    script: |-
+      #!/bin/bash
+      # SCUM install script (SteamCMD, Windows depot)
+      #
+      # Server Files: /mnt/server
+      set -e
+      trap 'echo "Install failed at line ${LINENO}: ${BASH_COMMAND}"' ERR
+
+      if [ -z "${STEAM_USER}" ] || [ -z "${STEAM_PASS}" ]; then
+          echo "Using anonymous Steam login"
+          STEAM_USER=anonymous
+          STEAM_PASS=""
+          STEAM_AUTH=""
+      fi
+
+      cd /tmp
+      mkdir -p /mnt/server/steamcmd /mnt/server/steamapps
+      curl -fsSL -o steamcmd.tar.gz https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz
+      tar -xzf steamcmd.tar.gz -C /mnt/server/steamcmd
+      cd /mnt/server/steamcmd
+
+      chown -R root:root /mnt
+      export HOME=/mnt/server
+
+      ./steamcmd.sh +force_install_dir /mnt/server +login ${STEAM_USER} ${STEAM_PASS} ${STEAM_AUTH} \
+          +@sSteamCmdForcePlatformType windows +app_update ${SRCDS_APPID} ${INSTALL_FLAGS} validate +quit
+
+      mkdir -p /mnt/server/.steam/sdk32 /mnt/server/.steam/sdk64
+      cp -v linux32/steamclient.so /mnt/server/.steam/sdk32/steamclient.so
+      cp -v linux64/steamclient.so /mnt/server/.steam/sdk64/steamclient.so
+
+      if [ ! -f /mnt/server/SCUM/Binaries/Win64/SCUMServer.exe ]; then
+          echo "SCUMServer.exe is missing, the SteamCMD download did not finish. Run the install again."
+          exit 1
+      fi
+
+      mkdir -p /mnt/server/SCUM/Saved/Config/WindowsServer /mnt/server/SCUM/Saved/Logs
+      # the panel fills these keys in on every start; the server adds the rest on first boot
+      if [ ! -f /mnt/server/SCUM/Saved/Config/WindowsServer/ServerSettings.ini ]; then
+          cat > /mnt/server/SCUM/Saved/Config/WindowsServer/ServerSettings.ini <<EOF
+      [General]
+      scum.ServerName=${SERVER_NAME}
+      scum.ServerDescription=${SERVER_DESCRIPTION}
+      scum.ServerPassword=${SERVER_PASSWORD}
+      scum.ServerPlaystyle=${SERVER_PLAYSTYLE}
+      scum.MaxPlayers=${MAX_PLAYERS}
+      EOF
+      fi
+
+      echo "-----------------------------------------"
+      echo "SCUM server installed"
+      echo "-----------------------------------------"
+    container: 'ghcr.io/pelican-eggs/installers:debian'
+    entrypoint: bash
+variables:
+  -
+    sort: 1
+    name: 'Server Name'
+    description: 'Name in the server browser.'
+    env_variable: SERVER_NAME
+    default_value: 'A Pelican hosted SCUM server'
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - string
+      - 'max:64'
+  -
+    sort: 2
+    name: 'Server Description'
+    description: ''
+    env_variable: SERVER_DESCRIPTION
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - string
+      - 'max:256'
+  -
+    sort: 3
+    name: 'Server Password'
+    description: 'Empty for a public server.'
+    env_variable: SERVER_PASSWORD
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - alpha_dash
+      - 'max:30'
+  -
+    sort: 4
+    name: 'Max Players'
+    description: ''
+    env_variable: MAX_PLAYERS
+    default_value: 32
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - integer
+      - 'between:1,128'
+  -
+    sort: 5
+    name: Playstyle
+    description: 'PVP or PVE (shown in the browser).'
+    env_variable: SERVER_PLAYSTYLE
+    default_value: PVP
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'in:PVP,PVE'
+  -
+    sort: 6
+    name: 'Query Port'
+    description: 'Steam query port. Must be an extra allocation and outside 27020-27050.'
+    env_variable: QUERY_PORT
+    default_value: 27015
+    user_viewable: true
+    user_editable: false
+    rules:
+      - required
+      - integer
+      - 'between:1024,65535'
+  -
+    sort: 7
+    name: 'Disable BattlEye'
+    description: 'Start without BattlEye. Not recommended for public servers.'
+    env_variable: NO_BATTLEYE
+    default_value: 0
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - boolean
+  -
+    sort: 8
+    name: 'Auto Update'
+    description: 'Check for server updates with SteamCMD on every start.'
+    env_variable: AUTO_UPDATE
+    default_value: 1
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - boolean
+  -
+    sort: 9
+    name: 'App ID'
+    description: ''
+    env_variable: SRCDS_APPID
+    default_value: 3792580
+    user_viewable: false
+    user_editable: false
+    rules:
+      - required
+      - 'in:3792580'
+  -
+    sort: 10
+    name: 'Windows Install'
+    description: ''
+    env_variable: WINDOWS_INSTALL
+    default_value: 1
+    user_viewable: false
+    user_editable: false
+    rules:
+      - required
+      - 'in:1'
+  -
+    sort: 11
+    name: 'Wine Debug'
+    description: ''
+    env_variable: WINEDEBUG
+    default_value: '-all'
+    user_viewable: false
+    user_editable: false
+    rules:
+      - required
+      - string
+  -
+    sort: 12
+    name: 'Winetricks'
+    description: 'Space separated winetricks verbs installed on start, e.g. vcrun2022.'
+    env_variable: WINETRICKS_RUN
+    default_value: vcrun2022
+    user_viewable: true
+    user_editable: false
+    rules:
+      - nullable
+      - string

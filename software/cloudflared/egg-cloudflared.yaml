@@ -1,0 +1,108 @@
+_comment: 'DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PANEL'
+meta:
+  version: PLCN_v3
+  update_url: null
+exported_at: '2026-11-02T12:00:00+00:00'
+name: 'Cloudflare Tunnel'
+author: barticekk@barticekk.eu
+uuid: 3a05a007-ee2d-4642-8c68-c4f649c22529
+description: |-
+  Runs cloudflared for a remotely managed Cloudflare Tunnel. Publishes websites and HTTP services
+  hosted on the node through Cloudflare with HTTPS, without opening inbound ports.
+icon: null
+tags:
+  - tunnel
+features: {  }
+docker_images:
+  Debian: 'ghcr.io/pelican-eggs/yolks:debian'
+file_denylist:
+  - cloudflared
+startup_commands:
+  Default: 'if [ -z "${TUNNEL_TOKEN}" ]; then echo "Set the Tunnel Token variable first, see the egg tutorial."; exit 1; fi; exec ./cloudflared tunnel --no-autoupdate --loglevel {{LOG_LEVEL}} --metrics 127.0.0.1:{{SERVER_PORT}} --protocol {{TUNNEL_PROTOCOL}} run'
+config:
+  files: {  }
+  startup:
+    done: 'Registered tunnel connection'
+  logs: {  }
+  stop: ^C
+scripts:
+  installation:
+    script: |-
+      #!/bin/bash
+      # cloudflared install script
+      #
+      # Server Files: /mnt/server
+      set -e
+      trap 'echo "Install failed at line ${LINENO}: ${BASH_COMMAND}"' ERR
+
+      apt-get update
+      apt-get install -y --no-install-recommends curl ca-certificates
+
+      case "$(uname -m)" in
+          x86_64) ARCH=amd64 ;;
+          aarch64) ARCH=arm64 ;;
+          *) echo "Unsupported architecture $(uname -m)"; exit 1 ;;
+      esac
+
+      if [ -z "${CLOUDFLARED_VERSION}" ] || [ "${CLOUDFLARED_VERSION}" == "latest" ]; then
+          URL=https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}
+      else
+          URL=https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${ARCH}
+      fi
+
+      echo "Downloading ${URL}"
+      curl -fsSL -o /mnt/server/cloudflared "${URL}"
+      chmod 755 /mnt/server/cloudflared
+      /mnt/server/cloudflared --version
+
+      echo "-----------------------------------------"
+      echo "cloudflared installed"
+      echo "-----------------------------------------"
+    container: 'ghcr.io/pelican-eggs/installers:debian'
+    entrypoint: bash
+variables:
+  -
+    sort: 1
+    name: 'Tunnel Token'
+    description: 'Token of a remotely managed tunnel from the Cloudflare Zero Trust dashboard (the long string after --token).'
+    env_variable: TUNNEL_TOKEN
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - 'regex:/^[A-Za-z0-9+\/=_\-]+$/'
+      - 'max:2048'
+  -
+    sort: 2
+    name: Protocol
+    description: 'auto, quic or http2. Use http2 if the node blocks outbound UDP 7844.'
+    env_variable: TUNNEL_PROTOCOL
+    default_value: auto
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'in:auto,quic,http2'
+  -
+    sort: 3
+    name: 'Log Level'
+    description: 'debug, info, warn, error or fatal.'
+    env_variable: LOG_LEVEL
+    default_value: info
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'in:debug,info,warn,error,fatal'
+  -
+    sort: 4
+    name: Version
+    description: 'latest or a release tag such as 2026.10.7. Reinstall to update.'
+    env_variable: CLOUDFLARED_VERSION
+    default_value: latest
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'regex:/^(latest|[0-9]{4}\.[0-9]+\.[0-9]+)$/'

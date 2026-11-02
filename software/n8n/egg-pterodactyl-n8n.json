@@ -1,0 +1,72 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-11-02T21:28:04+00:00",
+    "name": "n8n",
+    "author": "barticekk@barticekk.eu",
+    "description": "n8n is a workflow automation tool with a visual editor and hundreds of integrations: Discord and\nTelegram notifications, webhooks, scheduled jobs, API glue. Installed from npm, data stored in SQLite.",
+    "features": [],
+    "docker_images": {
+        "Node.js 24": "ghcr.io/pelican-eggs/yolks:nodejs_24"
+    },
+    "file_denylist": [],
+    "startup": "N8N_PORT={{SERVER_PORT}} N8N_LISTEN_ADDRESS=0.0.0.0 N8N_USER_FOLDER=/home/container WEBHOOK_URL={{PUBLIC_URL}} N8N_EDITOR_BASE_URL={{PUBLIC_URL}} GENERIC_TIMEZONE=${TZ:-UTC} N8N_SECURE_COOKIE={{SECURE_COOKIE}} N8N_DIAGNOSTICS_ENABLED={{DIAGNOSTICS}} N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true ./node_modules/.bin/n8n start",
+    "config": {
+        "files": "{}",
+        "startup": "{\n    \"done\": \"Editor is now accessible via\"\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# n8n install script\n#\n# Server Files: /mnt/server\nset -e\ntrap 'echo \"Install failed at line ${LINENO}: ${BASH_COMMAND}\"' ERR\n\ncd /mnt/server\n\nif [ ! -f package.json ]; then\n    cat > package.json <<'EOF'\n{\n  \"name\": \"n8n-server\",\n  \"private\": true\n}\nEOF\nfi\n\nVERSION=${N8N_VERSION:-latest}\necho \"Installing n8n@${VERSION}, this takes a few minutes\"\nnpm install --omit=dev --no-audit --no-fund --loglevel=error \"n8n@${VERSION}\"\n\n./node_modules/.bin/n8n --version\n\necho \"-----------------------------------------\"\necho \"n8n installed\"\necho \"-----------------------------------------\"",
+            "container": "node:24-trixie-slim",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Public URL",
+            "description": "URL users and webhooks reach n8n on, with a trailing slash, e.g. https://n8n.example.com/",
+            "env_variable": "PUBLIC_URL",
+            "default_value": "http://127.0.0.1:5678/",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|url|regex:/^https?:\\/\\/[^\\s\"'`$;&|<>]+\\/$/",
+            "field_type": "text"
+        },
+        {
+            "name": "Secure Cookie",
+            "description": "true behind HTTPS (recommended). Set false only to test over plain HTTP.",
+            "env_variable": "SECURE_COOKIE",
+            "default_value": "true",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:true,false",
+            "field_type": "text"
+        },
+        {
+            "name": "Send Diagnostics",
+            "description": "Anonymous usage data to n8n.",
+            "env_variable": "DIAGNOSTICS",
+            "default_value": "false",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:true,false",
+            "field_type": "text"
+        },
+        {
+            "name": "n8n Version",
+            "description": "latest or a version such as 2.45.7. Reinstall to update; workflows in .n8n/ are kept.",
+            "env_variable": "N8N_VERSION",
+            "default_value": "latest",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|regex:/^(latest|next|[0-9]+\\.[0-9]+\\.[0-9]+)$/",
+            "field_type": "text"
+        }
+    ]
+}

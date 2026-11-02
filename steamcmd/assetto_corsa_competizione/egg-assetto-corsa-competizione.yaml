@@ -1,0 +1,307 @@
+_comment: 'DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PANEL'
+meta:
+  version: PLCN_v3
+  update_url: null
+exported_at: '2026-11-02T12:00:00+00:00'
+name: 'Assetto Corsa Competizione'
+author: barticekk@barticekk.eu
+uuid: a3a71b68-3743-4b0f-b4f4-7e1821bc04eb
+description: |-
+  Official GT World Challenge sim racing game by Kunos Simulazioni. The Windows dedicated server runs
+  under Wine. Downloading it needs a Steam account that owns ACC. Configs are edited as UTF-8 in
+  acc-config/ and converted for the server on every start.
+icon: null
+tags:
+  - steamcmd
+  - wine
+features:
+  - steam_disk_space
+docker_images:
+  'Wine Latest': 'ghcr.io/pelican-eggs/yolks:wine_latest'
+  'Wine Staging': 'ghcr.io/pelican-eggs/yolks:wine_staging'
+file_denylist: {  }
+startup_commands:
+  Default: 'if [ ! -f start.sh ]; then echo "start.sh is missing: the installation did not finish. Reinstall the server and check the install output for the line starting with Install failed."; exit 1; fi; bash ./start.sh'
+config:
+  files: {  }
+  startup:
+    done: 'Server starting with version'
+  logs: {  }
+  stop: ^C
+scripts:
+  installation:
+    script: |-
+      #!/bin/bash
+      # Assetto Corsa Competizione install script (SteamCMD, Windows depot, owned account)
+      #
+      # Server Files: /mnt/server
+      set -e
+      trap 'echo "Install failed at line ${LINENO}: ${BASH_COMMAND}"' ERR
+
+      if [ -z "${STEAM_USER}" ] || [ "${STEAM_USER}" == "anonymous" ]; then
+          echo "The ACC dedicated server can only be downloaded by a Steam account that owns ACC."
+          echo "Set Steam Username and Steam Password, then reinstall."
+          exit 1
+      fi
+
+      cd /tmp
+      mkdir -p /mnt/server/steamcmd /mnt/server/steamapps
+      curl -fsSL -o steamcmd.tar.gz https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz
+      tar -xzf steamcmd.tar.gz -C /mnt/server/steamcmd
+      cd /mnt/server/steamcmd
+
+      chown -R root:root /mnt
+      export HOME=/mnt/server
+
+      ./steamcmd.sh +force_install_dir /mnt/server +login "${STEAM_USER}" "${STEAM_PASS}" ${STEAM_AUTH} \
+          +@sSteamCmdForcePlatformType windows +app_update ${SRCDS_APPID} validate +quit
+
+      mkdir -p /mnt/server/.steam/sdk32 /mnt/server/.steam/sdk64
+      cp -v linux32/steamclient.so /mnt/server/.steam/sdk32/steamclient.so
+      cp -v linux64/steamclient.so /mnt/server/.steam/sdk64/steamclient.so
+
+      if [ ! -f /mnt/server/server/accServer.exe ]; then
+          echo "server/accServer.exe is missing. Check the Steam login (Steam Guard code) and reinstall."
+          exit 1
+      fi
+
+      cd /mnt/server
+      mkdir -p acc-config server/cfg
+
+      if [ ! -f acc-config/settings.json ]; then
+          cat > acc-config/settings.json <<EOF
+      {
+          "serverName": "${SERVER_NAME}",
+          "adminPassword": "${ADMIN_PASSWORD}",
+          "password": "${SERVER_PASSWORD}",
+          "spectatorPassword": "",
+          "carGroup": "GT3",
+          "trackMedalsRequirement": 0,
+          "safetyRatingRequirement": -1,
+          "racecraftRatingRequirement": -1,
+          "maxCarSlots": 30,
+          "isRaceLocked": 1,
+          "dumpLeaderboards": 1,
+          "allowAutoDQ": 1,
+          "shortFormationLap": 0,
+          "formationLapType": 3,
+          "randomizeTrackWhenEmpty": 0,
+          "ignorePrematureDisconnects": 0,
+          "configVersion": 1
+      }
+      EOF
+      fi
+
+      if [ ! -f acc-config/event.json ]; then
+          cat > acc-config/event.json <<'EOF'
+      {
+          "track": "monza",
+          "preRaceWaitingTimeSeconds": 80,
+          "sessionOverTimeSeconds": 120,
+          "ambientTemp": 22,
+          "cloudLevel": 0.1,
+          "rain": 0.0,
+          "weatherRandomness": 1,
+          "sessions": [
+              { "hourOfDay": 10, "dayOfWeekend": 2, "timeMultiplier": 1, "sessionType": "P", "sessionDurationMinutes": 20 },
+              { "hourOfDay": 14, "dayOfWeekend": 3, "timeMultiplier": 1, "sessionType": "Q", "sessionDurationMinutes": 10 },
+              { "hourOfDay": 16, "dayOfWeekend": 3, "timeMultiplier": 2, "sessionType": "R", "sessionDurationMinutes": 20 }
+          ],
+          "configVersion": 1
+      }
+      EOF
+      fi
+
+      if [ ! -f acc-config/assistRules.json ]; then
+          cat > acc-config/assistRules.json <<'EOF'
+      {
+          "stabilityControlLevelMax": 100,
+          "disableAutosteer": 1,
+          "disableAutoLights": 0,
+          "disableAutoWiper": 0,
+          "disableAutoEngineStart": 0,
+          "disableAutoPitLimiter": 0,
+          "disableAutoGear": 0,
+          "disableAutoClutch": 0,
+          "disableIdealLine": 0
+      }
+      EOF
+      fi
+
+      # accServer reads UTF-16 LE; configuration.json is rebuilt from the panel variables every start
+      cat > start.sh <<'EOF'
+      #!/bin/bash
+      cd /home/container
+
+      to_utf16() {
+          { printf '\xff\xfe'; iconv -f UTF-8 -t UTF-16LE "$1"; } > "$2"
+      }
+
+      cat > acc-config/configuration.json <<JSON
+      {
+          "udpPort": ${SERVER_PORT},
+          "tcpPort": ${SERVER_PORT},
+          "maxConnections": ${MAX_CONNECTIONS},
+          "lanDiscovery": 0,
+          "registerToLobby": ${REGISTER_TO_LOBBY},
+          "publicIP": "${PUBLIC_IP}",
+          "configVersion": 1
+      }
+      JSON
+      if [ -z "${PUBLIC_IP}" ]; then
+          sed -i '/"publicIP"/d' acc-config/configuration.json
+      fi
+
+      for file in acc-config/*.json; do
+          to_utf16 "${file}" "server/cfg/$(basename "${file}")" || { echo "Could not convert ${file}"; exit 1; }
+      done
+
+      cd server
+      exec wine accServer.exe
+      EOF
+      chmod 755 start.sh
+
+      echo "-----------------------------------------"
+      echo "ACC server installed, edit acc-config/*.json"
+      echo "-----------------------------------------"
+    container: 'ghcr.io/pelican-eggs/installers:debian'
+    entrypoint: bash
+variables:
+  -
+    sort: 1
+    name: 'Steam Username'
+    description: 'Steam account that owns Assetto Corsa Competizione. A separate account is recommended.'
+    env_variable: STEAM_USER
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - string
+      - 'max:64'
+  -
+    sort: 2
+    name: 'Steam Password'
+    description: ''
+    env_variable: STEAM_PASS
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - string
+      - 'max:128'
+  -
+    sort: 3
+    name: 'Steam Guard Code'
+    description: 'E-mail Steam Guard code for the first install. Leave empty when approving in the Steam mobile app.'
+    env_variable: STEAM_AUTH
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - 'regex:/^[A-Za-z0-9]{5}$/'
+  -
+    sort: 4
+    name: 'Server Name'
+    description: 'Initial value written to acc-config/settings.json on the first install.'
+    env_variable: SERVER_NAME
+    default_value: 'Pelican ACC Server'
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'regex:/^[^"\\]+$/'
+      - 'max:64'
+  -
+    sort: 5
+    name: 'Admin Password'
+    description: 'Initial admin password (type /admin <password> in the in-game chat). First install only.'
+    env_variable: ADMIN_PASSWORD
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'regex:/^[A-Za-z0-9_\-!.@]+$/'
+      - 'max:32'
+  -
+    sort: 6
+    name: 'Join Password'
+    description: 'Initial join password, empty for public. First install only.'
+    env_variable: SERVER_PASSWORD
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - 'regex:/^[A-Za-z0-9_\-!.@]+$/'
+      - 'max:32'
+  -
+    sort: 7
+    name: 'Max Connections'
+    description: 'Drivers plus spectators that can connect.'
+    env_variable: MAX_CONNECTIONS
+    default_value: 30
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - integer
+      - 'between:1,100'
+  -
+    sort: 8
+    name: 'Register To Lobby'
+    description: '1 lists the server in the public lobby, 0 for private (direct IP) only.'
+    env_variable: REGISTER_TO_LOBBY
+    default_value: 1
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'in:0,1'
+  -
+    sort: 9
+    name: 'Public IP'
+    description: 'Only needed when the allocation uses a private IP behind NAT.'
+    env_variable: PUBLIC_IP
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - ipv4
+  -
+    sort: 10
+    name: 'Auto Update'
+    description: 'Check for server updates on start (uses the stored Steam login).'
+    env_variable: AUTO_UPDATE
+    default_value: 1
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - boolean
+  -
+    sort: 11
+    name: 'App ID'
+    description: ''
+    env_variable: SRCDS_APPID
+    default_value: 1430110
+    user_viewable: false
+    user_editable: false
+    rules:
+      - required
+      - 'in:1430110'
+  -
+    sort: 12
+    name: 'Windows Install'
+    description: ''
+    env_variable: WINDOWS_INSTALL
+    default_value: 1
+    user_viewable: false
+    user_editable: false
+    rules:
+      - required
+      - 'in:1'

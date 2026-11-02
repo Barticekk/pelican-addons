@@ -1,0 +1,54 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-11-02T21:28:04+00:00",
+    "name": "playit.gg Agent",
+    "author": "barticekk@barticekk.eu",
+    "description": "playit.gg tunnels game and app servers to the internet without a public IP or port forwarding.\nRuns the official playit daemon; tunnels and their local targets are managed on playit.gg.",
+    "features": [],
+    "docker_images": {
+        "Debian": "ghcr.io/pelican-eggs/yolks:debian"
+    },
+    "file_denylist": [
+        "playitd"
+    ],
+    "startup": "if [ -z \"${SECRET_KEY}\" ]; then echo \"Set the Secret Key variable first, see the egg tutorial.\"; exit 1; fi; (umask 077; printf \"%s\" \"${SECRET_KEY}\" > .playit-secret); exec ./playitd --secret-path /home/container/.playit-secret --socket-path /tmp/playitd.sock",
+    "config": {
+        "files": "{}",
+        "startup": "{\n    \"done\": \"Starting playitd\"\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# playit.gg agent install script\n#\n# Server Files: /mnt/server\n# The daemon is published as a container image with a static binary, so it is copied out of\n# the image layers with the registry API.\nset -eo pipefail\ntrap 'echo \"Install failed at line ${LINENO}: ${BASH_COMMAND}\"' ERR\n\napt-get update\napt-get install -y --no-install-recommends curl ca-certificates jq tar gzip\n\ncase \"$(uname -m)\" in\n    x86_64) ARCH=amd64 ;;\n    aarch64) ARCH=arm64 ;;\n    *) echo \"Unsupported architecture $(uname -m)\"; exit 1 ;;\nesac\n\nREPO=playit-cloud/playit-agent\nTAG=${PLAYIT_VERSION:-latest}\nREGISTRY=https://ghcr.io/v2/${REPO}\nACCEPT=\"application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json\"\nTOKEN=$(curl -fsSL \"https://ghcr.io/token?scope=repository:${REPO}:pull\" | jq -r .token)\n\nregistry_get() {\n    curl -fsSL -H \"Authorization: Bearer ${TOKEN}\" -H \"Accept: ${ACCEPT}\" \"$@\"\n}\n\necho \"Resolving ghcr.io/${REPO}:${TAG} for linux/${ARCH}\"\nDIGEST=$(registry_get \"${REGISTRY}/manifests/${TAG}\" \\\n    | jq -r --arg arch \"${ARCH}\" '.manifests[] | select(.platform.os == \"linux\" and .platform.architecture == $arch) | .digest' | head -n1)\nif [ -z \"${DIGEST}\" ]; then\n    echo \"No linux/${ARCH} image found for tag ${TAG}\"\n    exit 1\nfi\n\nROOTFS=$(mktemp -d)\nfor layer in $(registry_get \"${REGISTRY}/manifests/${DIGEST}\" | jq -r '.layers[].digest'); do\n    registry_get \"${REGISTRY}/blobs/${layer}\" | tar -xz -C \"${ROOTFS}\" --no-same-owner --exclude='dev/*' 2>/dev/null || true\ndone\n\nif [ ! -f \"${ROOTFS}/usr/local/bin/playitd\" ]; then\n    echo \"playitd was not found in the image\"\n    exit 1\nfi\ninstall -m 755 \"${ROOTFS}/usr/local/bin/playitd\" /mnt/server/playitd\nrm -rf \"${ROOTFS}\"\n\necho \"-----------------------------------------\"\necho \"playit agent installed\"\necho \"-----------------------------------------\"",
+            "container": "ghcr.io/pelican-eggs/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Secret Key",
+            "description": "Agent secret from playit.gg (create an agent of type Docker). Keep it private.",
+            "env_variable": "SECRET_KEY",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|regex:/^[A-Za-z0-9]+$/|max:256",
+            "field_type": "text"
+        },
+        {
+            "name": "Agent Version",
+            "description": "Image tag of ghcr.io/playit-cloud/playit-agent, latest by default. Reinstall to update.",
+            "env_variable": "PLAYIT_VERSION",
+            "default_value": "latest",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|regex:/^[A-Za-z0-9._\\-]+$/",
+            "field_type": "text"
+        }
+    ]
+}

@@ -1,0 +1,225 @@
+_comment: 'DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PANEL'
+meta:
+  version: PLCN_v3
+  update_url: null
+exported_at: '2026-11-02T12:00:00+00:00'
+name: 'MySQL 8.4 LTS'
+author: barticekk@barticekk.eu
+uuid: 5675b274-6a53-4cf2-aa0b-5ddb35b3b81a
+description: |-
+  MySQL Community Server 8.4 LTS from Oracle's generic Linux build. Many game plugins and frameworks
+  (FiveM ESX/QBCore, LuckPerms, CoreProtect) are tested against MySQL rather than MariaDB.
+icon: null
+tags:
+  - database
+features: {  }
+docker_images:
+  Debian: 'ghcr.io/pelican-eggs/yolks:debian'
+file_denylist: {  }
+startup_commands:
+  Default: '{ ./mysql/bin/mysqld --defaults-file=/home/container/.my.cnf --innodb-buffer-pool-size=$(( ({{SERVER_MEMORY}} + 256) / 2 ))M & } && until ./mysql/bin/mysqladmin --defaults-extra-file=/home/container/.root.cnf ping --silent 2>/dev/null; do sleep 1; done && ./mysql/bin/mysql --defaults-extra-file=/home/container/.root.cnf --batch --unbuffered --table --force; wait'
+config:
+  files:
+    .my.cnf:
+      parser: file
+      find:
+        port: 'port = {{server.allocations.default.port}}'
+  startup:
+    done: 'ready for connections'
+  logs: {  }
+  stop: 'shutdown; exit;'
+scripts:
+  installation:
+    script: |-
+      #!/bin/bash
+      # MySQL 8.4 LTS install script
+      #
+      # Server Files: /mnt/server
+      set -eo pipefail
+      trap 'echo "Install failed at line ${LINENO}: ${BASH_COMMAND}"' ERR
+
+      apt-get update
+      apt-get install -y --no-install-recommends curl ca-certificates xz-utils libaio1 libnuma1 libncurses6
+
+      if [ "$(uname -m)" != "x86_64" ]; then
+          echo "Oracle only publishes the minimal generic build for x86_64. ARM nodes are not supported by this egg."
+          exit 1
+      fi
+
+      CDN=https://cdn.mysql.com/Downloads/MySQL-8.4
+      ARCHIVE=https://downloads.mysql.com/archives/get/p/23/file
+
+      tarball_name() {
+          echo "mysql-$1-linux-glibc2.28-x86_64-minimal.tar.xz"
+      }
+
+      if [ -z "${MYSQL_VERSION}" ] || [ "${MYSQL_VERSION}" == "latest" ]; then
+          # the CDN only keeps current releases, so the newest patch that answers is the latest one
+          for patch in $(seq 40 -1 0); do
+              if curl -sfI "${CDN}/$(tarball_name 8.4.${patch})" > /dev/null; then
+                  MYSQL_VERSION=8.4.${patch}
+                  break
+              fi
+          done
+          if [ -z "${MYSQL_VERSION}" ] || [ "${MYSQL_VERSION}" == "latest" ]; then
+              echo "Could not find a MySQL 8.4 release on ${CDN}"
+              exit 1
+          fi
+      fi
+
+      FILE=$(tarball_name "${MYSQL_VERSION}")
+      echo "Installing MySQL ${MYSQL_VERSION}"
+      cd /tmp
+      curl -fsSL -o mysql.tar.xz "${CDN}/${FILE}" || curl -fsSL -o mysql.tar.xz "${ARCHIVE}/${FILE}"
+
+      rm -rf /mnt/server/mysql
+      mkdir -p /mnt/server/mysql
+      tar -xJf mysql.tar.xz -C /mnt/server/mysql --strip-components=1
+      rm -f mysql.tar.xz
+      rm -rf /mnt/server/mysql/{docs,man,include}
+
+      # libaio, libnuma and libncurses are missing from the runtime image; the binaries already look in lib/private
+      for lib in libaio.so.1 libnuma.so.1 libncurses.so.6; do
+          cp -L "/usr/lib/x86_64-linux-gnu/${lib}" /mnt/server/mysql/lib/private/
+      done
+
+      mkdir -p /mnt/server/data /mnt/server/run /mnt/server/tmp
+      chmod 750 /mnt/server/tmp
+
+      if [ ! -f /mnt/server/.my.cnf ]; then
+          cat > /mnt/server/.my.cnf <<EOF
+      [mysqld]
+      basedir = /home/container/mysql
+      datadir = /home/container/data
+      socket = /home/container/run/mysqld.sock
+      pid-file = /home/container/run/mysqld.pid
+      tmpdir = /home/container/tmp
+      port = ${SERVER_PORT}
+      bind-address = 0.0.0.0
+      mysqlx = OFF
+      skip-name-resolve
+      local-infile = 0
+      secure-file-priv = /home/container/tmp
+      character-set-server = utf8mb4
+      collation-server = utf8mb4_0900_ai_ci
+      max_connections = 151
+      log-error-verbosity = 2
+
+      [client]
+      socket = /home/container/run/mysqld.sock
+      EOF
+      fi
+
+      if [ -d /mnt/server/data/mysql ]; then
+          echo "Existing data directory found, keeping it. MySQL upgrades it on the next start."
+      else
+          echo "Initializing a new data directory"
+          INIT_CNF=/tmp/init.cnf
+          sed -e 's#/home/container#/mnt/server#g' /mnt/server/.my.cnf > "${INIT_CNF}"
+          /mnt/server/mysql/bin/mysqld --defaults-file="${INIT_CNF}" --user=root --initialize-insecure
+
+          /mnt/server/mysql/bin/mysqld --defaults-file="${INIT_CNF}" --user=root --skip-networking &
+          for _ in $(seq 1 60); do
+              /mnt/server/mysql/bin/mysqladmin --socket=/mnt/server/run/mysqld.sock -uroot ping --silent 2>/dev/null && break
+              sleep 1
+          done
+
+          {
+              echo "ALTER USER 'root'@'localhost' IDENTIFIED BY '${ROOT_PASSWORD}';"
+              echo "DROP USER IF EXISTS 'root'@'%';"
+              if [ -n "${DB_NAME}" ]; then
+                  echo "CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`;"
+              fi
+              if [ -n "${DB_USER}" ] && [ -n "${DB_PASSWORD}" ]; then
+                  echo "CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASSWORD}';"
+                  if [ -n "${DB_NAME}" ]; then
+                      echo "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'%';"
+                  fi
+              fi
+              echo "FLUSH PRIVILEGES;"
+          } | /mnt/server/mysql/bin/mysql --socket=/mnt/server/run/mysqld.sock -uroot
+
+          /mnt/server/mysql/bin/mysqladmin --socket=/mnt/server/run/mysqld.sock -uroot -p"${ROOT_PASSWORD}" shutdown 2>/dev/null
+          wait
+          rm -f "${INIT_CNF}"
+      fi
+
+      # the console logs in as root through this file, so the panel console works without typing a password
+      cat > /mnt/server/.root.cnf <<EOF
+      [client]
+      user = root
+      password = "${ROOT_PASSWORD}"
+      socket = /home/container/run/mysqld.sock
+      EOF
+      chmod 600 /mnt/server/.root.cnf /mnt/server/.my.cnf
+
+      echo "-----------------------------------------"
+      echo "MySQL ${MYSQL_VERSION} installed"
+      echo "-----------------------------------------"
+    container: 'ghcr.io/pelican-eggs/installers:debian'
+    entrypoint: bash
+variables:
+  -
+    sort: 1
+    name: 'MySQL Version'
+    description: 'latest picks the newest 8.4 release, or pin one such as 8.4.13. Reinstall to upgrade; the data directory is kept.'
+    env_variable: MYSQL_VERSION
+    default_value: latest
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - string
+      - 'regex:/^(latest|8\.4\.[0-9]+)$/'
+  -
+    sort: 2
+    name: 'Root Password'
+    description: 'Password for root@localhost. Only used when the data directory is created; change it later with ALTER USER.'
+    env_variable: ROOT_PASSWORD
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - string
+      - 'min:12'
+      - 'max:64'
+      - 'regex:/^[^\s"''\\`]+$/'
+  -
+    sort: 3
+    name: 'Database Name'
+    description: 'Optional database created on first install.'
+    env_variable: DB_NAME
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - 'regex:/^[A-Za-z0-9_]+$/'
+      - 'max:64'
+  -
+    sort: 4
+    name: 'Database User'
+    description: 'Optional remote user (host %) created on first install with full rights on the database above.'
+    env_variable: DB_USER
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - 'regex:/^[A-Za-z0-9_]+$/'
+      - 'max:32'
+  -
+    sort: 5
+    name: 'Database Password'
+    description: 'Password for the user above.'
+    env_variable: DB_PASSWORD
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - string
+      - 'min:12'
+      - 'max:64'
+      - 'regex:/^[^\s"''\\`]+$/'

@@ -1,0 +1,143 @@
+_comment: 'DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PANEL'
+meta:
+  version: PLCN_v3
+  update_url: null
+exported_at: '2026-11-02T12:00:00+00:00'
+name: 'Farming Simulator 25 (experimental)'
+author: barticekk@barticekk.eu
+uuid: 9e655151-6efe-40ff-a8d9-0301b938bc5a
+description: |-
+  Experimental: runs the Farming Simulator 25 dedicated server tool (dedicatedServer.exe and its web
+  interface) under Wine with a virtual display. GIANTS only supports Windows; you upload your own
+  installed and licensed copy of the game.
+icon: null
+tags:
+  - wine
+features: {  }
+docker_images:
+  'Wine Latest': 'ghcr.io/pelican-eggs/yolks:wine_latest'
+  'Wine Staging': 'ghcr.io/pelican-eggs/yolks:wine_staging'
+file_denylist: {  }
+startup_commands:
+  Default: 'if [ ! -f start.sh ]; then echo "start.sh is missing: the installation did not finish. Reinstall the server and check the install output for the line starting with Install failed."; exit 1; fi; bash ./start.sh'
+config:
+  files: {  }
+  startup:
+    done: 'web interface on port'
+  logs: {  }
+  stop: ^C
+scripts:
+  installation:
+    script: |-
+      #!/bin/bash
+      # Farming Simulator 25 (experimental) install script
+      #
+      # Server Files: /mnt/server
+      # Nothing can be downloaded: the game is uploaded by the user. This prepares folders and the start script.
+      set -e
+      trap 'echo "Install failed at line ${LINENO}: ${BASH_COMMAND}"' ERR
+
+      cd /mnt/server
+      mkdir -p game logs
+
+      cat > start.sh <<'EOF'
+      #!/bin/bash
+      cd /home/container
+
+      if [ ! -f game/dedicatedServer.exe ]; then
+          echo "game/dedicatedServer.exe not found."
+          echo "Upload your installed Farming Simulator 25 folder into game/ (see the egg tutorial)."
+          exit 1
+      fi
+
+      PROFILE="${WINEPREFIX}/drive_c/users/${USER:-container}/Documents/My Games/FarmingSimulator2025"
+      mkdir -p "${PROFILE}/mods"
+      ln -sfn "${PROFILE}" profile
+
+      XML=game/dedicatedServer.xml
+      if [ -f "${XML}" ]; then
+          # web interface on the primary allocation, game traffic on the second one
+          sed -i -E \
+              -e "s#(<webserver[^>]*port=\")[0-9]+#\1${SERVER_PORT}#" \
+              -e "s#<port>[0-9]+</port>#<port>${GAME_PORT}</port>#" \
+              -e "s#<username>[^<]*</username>#<username>${WEB_USER}</username>#" \
+              -e "s#<passphrase>[^<]*</passphrase>#<passphrase>${WEB_PASSWORD}</passphrase>#" \
+              "${XML}"
+      else
+          echo "game/dedicatedServer.xml is missing, the web interface will use its defaults."
+      fi
+
+      cd game
+      wine dedicatedServer.exe > ../logs/dedicatedServer.log 2>&1 &
+      SERVER_PID=$!
+      echo "dedicatedServer.exe started, web interface on port ${SERVER_PORT}"
+      touch "${PROFILE}/log.txt"
+      tail -n0 -F "${PROFILE}/log.txt" ../logs/dedicatedServer.log --pid=${SERVER_PID}
+      EOF
+      chmod 755 start.sh
+
+      echo "-----------------------------------------"
+      echo "Prepared. Upload the installed game into game/ before starting."
+      echo "-----------------------------------------"
+    container: 'ghcr.io/pelican-eggs/installers:debian'
+    entrypoint: bash
+variables:
+  -
+    sort: 1
+    name: 'Game Port'
+    description: 'Port players connect to. Must be an additional allocation (TCP + UDP).'
+    env_variable: GAME_PORT
+    default_value: 10823
+    user_viewable: true
+    user_editable: false
+    rules:
+      - required
+      - integer
+      - 'between:1024,65535'
+  -
+    sort: 2
+    name: 'Web Admin User'
+    description: 'Login for the dedicated server web interface.'
+    env_variable: WEB_USER
+    default_value: admin
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'regex:/^[A-Za-z0-9_\-]+$/'
+      - 'max:32'
+  -
+    sort: 3
+    name: 'Web Admin Password'
+    description: 'Password for the web interface.'
+    env_variable: WEB_PASSWORD
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'regex:/^[A-Za-z0-9_\-!.@]+$/'
+      - 'min:10'
+      - 'max:64'
+  -
+    sort: 4
+    name: Winetricks
+    description: 'Space separated winetricks verbs installed on start.'
+    env_variable: WINETRICKS_RUN
+    default_value: 'vcrun2022 d3dcompiler_47'
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - string
+  -
+    sort: 5
+    name: 'Wine Debug'
+    description: ''
+    env_variable: WINEDEBUG
+    default_value: '-all'
+    user_viewable: false
+    user_editable: false
+    rules:
+      - required
+      - string

@@ -1,0 +1,92 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-11-02T21:28:04+00:00",
+    "name": "Call of Duty 4 (CoD4x)",
+    "author": "barticekk@barticekk.eu",
+    "description": "CoD4x is the maintained server for Call of Duty 4: Modern Warfare. It fixes the original server's\nbugs and adds plugins, a new master server and automatic client updates. The original game files\n(main/*.iwd and zone/) have to be uploaded from your own copy of the game.",
+    "features": [],
+    "docker_images": {
+        "Debian (32-bit libs)": "ghcr.io/pelican-eggs/steamcmd:debian"
+    },
+    "file_denylist": [],
+    "startup": "./cod4x18_dedrun +set dedicated 2 +set net_port {{SERVER_PORT}} +set fs_basepath /home/container +set fs_homepath /home/container +set sv_maxclients {{MAX_PLAYERS}} +set sv_authtoken \"{{AUTH_TOKEN}}\" $( [ -n \"{{FS_GAME}}\" ] && printf %s \"+set fs_game {{FS_GAME}}\" ) +exec {{SERVER_CONFIG}} +map_rotate",
+    "config": {
+        "files": "{}",
+        "startup": "{\n    \"done\": \"By using this software you agree to the usage conditions\"\n}",
+        "logs": "{}",
+        "stop": "quit"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# CoD4x install script\n#\n# Server Files: /mnt/server\nset -e\ntrap 'echo \"Install failed at line ${LINENO}: ${BASH_COMMAND}\"' ERR\n\napt-get update\napt-get install -y --no-install-recommends curl ca-certificates unzip\n\ncd /mnt/server\nmkdir -p main zone mods usermaps plugins\n\nif [ -z \"${COD4X_VERSION}\" ] || [ \"${COD4X_VERSION}\" == \"latest\" ]; then\n    BASE=https://github.com/callofduty4x/CoD4x_Server/releases/latest/download\nelse\n    BASE=https://github.com/callofduty4x/CoD4x_Server/releases/download/${COD4X_VERSION}\nfi\n\necho \"Downloading CoD4x server from ${BASE}\"\ncurl -fsSL -o cod4x18_dedrun \"${BASE}/cod4x18_dedrun\"\nchmod 755 cod4x18_dedrun\n\nif curl -fsSL -o /tmp/plugins.zip \"${BASE}/plugins_linux.zip\"; then\n    unzip -oqj /tmp/plugins.zip -d plugins\n    rm -f /tmp/plugins.zip\nfi\n\nif [ ! -f \"main/${SERVER_CONFIG}\" ]; then\n    cat > \"main/${SERVER_CONFIG}\" <<'EOF'\n// CoD4x server config, executed on start\nset sv_hostname \"^2Pelican ^7CoD4x Server\"\nset g_motd \"Have fun\"\nset rcon_password \"\"\nset g_password \"\"\nset sv_privateClients 0\nset sv_privatePassword \"\"\n\nset sv_pure 1\nset sv_floodprotect 1\nset sv_maxPing 0\nset sv_minPing 0\nset sv_timeout 40\nset sv_allowDownload 1\nset sv_wwwDownload 0\nset sv_wwwBaseURL \"\"\n\nset g_gametype \"war\"\nset scr_war_scorelimit 7500\nset scr_war_timelimit 15\nset scr_teambalance 1\nset scr_game_spectatetype 1\n\nset sv_mapRotation \"gametype war map mp_crash gametype war map mp_backlot gametype war map mp_strike gametype war map mp_crossfire gametype war map mp_vacant gametype war map mp_overgrown gametype war map mp_citystreets gametype war map mp_bloc\"\nEOF\n    if [ -n \"${RCON_PASSWORD}\" ]; then\n        sed -i \"s#^set rcon_password \\\"\\\"#set rcon_password \\\"${RCON_PASSWORD}\\\"#\" \"main/${SERVER_CONFIG}\"\n    fi\nfi\n\nif ! ls main/iw_*.iwd > /dev/null 2>&1; then\n    echo \"================================================================\"\n    echo \" Upload the original game files before starting the server:\"\n    echo \"   <CoD4 folder>/main/*.iwd  ->  main/\"\n    echo \"   <CoD4 folder>/zone/*      ->  zone/\"\n    echo \"================================================================\"\nfi\n\necho \"-----------------------------------------\"\necho \"CoD4x installed\"\necho \"-----------------------------------------\"",
+            "container": "ghcr.io/pelican-eggs/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Max Players",
+            "description": "",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "24",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|between:1,64",
+            "field_type": "text"
+        },
+        {
+            "name": "Server Config",
+            "description": "Config file in main/ executed on start.",
+            "env_variable": "SERVER_CONFIG",
+            "default_value": "server.cfg",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|regex:/^[A-Za-z0-9_\\-]+\\.cfg$/",
+            "field_type": "text"
+        },
+        {
+            "name": "RCON Password",
+            "description": "Written into the config on the first install; change it there afterwards.",
+            "env_variable": "RCON_PASSWORD",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|regex:/^[A-Za-z0-9_\\-!.@]+$/|max:32",
+            "field_type": "text"
+        },
+        {
+            "name": "Auth Token",
+            "description": "Server token from the CoD4x master server (cod4x.ovh), needed to be listed publicly.",
+            "env_variable": "AUTH_TOKEN",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|regex:/^[A-Za-z0-9]+$/|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Mod (fs_game)",
+            "description": "Optional mod folder, e.g. mods/promod. Leave empty for the stock game.",
+            "env_variable": "FS_GAME",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|regex:/^mods\\/[A-Za-z0-9_\\-]+$/",
+            "field_type": "text"
+        },
+        {
+            "name": "CoD4x Version",
+            "description": "latest or a release tag such as 21.2. Reinstall to update.",
+            "env_variable": "COD4X_VERSION",
+            "default_value": "latest",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|regex:/^(latest|[0-9]+(\\.[0-9]+)*)$/",
+            "field_type": "text"
+        }
+    ]
+}

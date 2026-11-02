@@ -1,0 +1,297 @@
+_comment: 'DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PANEL'
+meta:
+  version: PLCN_v3
+  update_url: null
+exported_at: '2026-11-02T12:00:00+00:00'
+name: BookStack
+author: barticekk@barticekk.eu
+uuid: 874dbee4-d884-4691-a5c3-c5f29ce0714e
+description: |-
+  BookStack is a simple, self-hosted platform for organising and storing documentation: server rules,
+  guides, staff handbooks. Runs on FrankenPHP and needs a MySQL 8 or MariaDB 10.6+ database.
+icon: null
+tags:
+  - php
+  - wiki
+features: {  }
+docker_images:
+  Debian: 'ghcr.io/pelican-eggs/yolks:debian'
+file_denylist:
+  - frankenphp
+startup_commands:
+  Default: 'if [ ! -f start.sh ]; then echo "start.sh is missing: the installation did not finish. Reinstall the server and check the install output for the line starting with Install failed."; exit 1; fi; bash ./start.sh'
+config:
+  files:
+    www/.env:
+      parser: file
+      find:
+        APP_URL: 'APP_URL={{server.environment.APP_URL}}'
+        DB_HOST: 'DB_HOST={{server.environment.DB_HOST}}'
+        DB_PORT: 'DB_PORT={{server.environment.DB_PORT}}'
+        DB_DATABASE: 'DB_DATABASE={{server.environment.DB_DATABASE}}'
+        DB_USERNAME: 'DB_USERNAME={{server.environment.DB_USERNAME}}'
+        DB_PASSWORD: 'DB_PASSWORD="{{server.environment.DB_PASSWORD}}"'
+  startup:
+    done: 'FrankenPHP started'
+  logs: {  }
+  stop: ^C
+scripts:
+  installation:
+    script: |-
+      #!/bin/bash
+      # BookStack install script
+      #
+      # Server Files: /mnt/server
+      set -e
+      trap 'echo "Install failed at line ${LINENO}: ${BASH_COMMAND}"' ERR
+
+      apt-get update
+      apt-get install -y --no-install-recommends curl ca-certificates git jq unzip
+
+      case "$(uname -m)" in
+          x86_64) ARCH=x86_64 ;;
+          aarch64) ARCH=aarch64 ;;
+          *) echo "Unsupported architecture $(uname -m)"; exit 1 ;;
+      esac
+
+      cd /mnt/server
+
+      DOWNLOAD_URL=$(curl -fsSL https://api.github.com/repos/php/frankenphp/releases/latest | jq -r --arg name "frankenphp-linux-${ARCH}" '.assets[] | select(.name == $name) | .browser_download_url')
+      if [ -z "${DOWNLOAD_URL}" ]; then
+          DOWNLOAD_URL=https://github.com/php/frankenphp/releases/latest/download/frankenphp-linux-${ARCH}
+      fi
+      echo "Downloading ${DOWNLOAD_URL}"
+      curl -fsSL -o frankenphp "${DOWNLOAD_URL}"
+      chmod 755 frankenphp
+      ./frankenphp version
+
+      curl -fsSL -o composer.phar https://getcomposer.org/download/latest-stable/composer.phar
+
+      mkdir -p bin
+      cat > bin/php <<'EOF'
+      #!/bin/bash
+      while [ $# -gt 0 ]; do
+          case "$1" in
+              -d) shift 2 ;;
+              -d*) shift ;;
+              *) break ;;
+          esac
+      done
+      exec "$(dirname "$(readlink -f "$0")")/../frankenphp" php-cli "$@"
+      EOF
+      chmod 755 bin/php
+      export PATH=/mnt/server/bin:${PATH} PHP_BINARY=/mnt/server/bin/php
+
+      if [ -d www/.git ]; then
+          echo "Updating BookStack"
+          git -C www fetch --depth 1 origin release
+          git -C www reset --hard origin/release
+      else
+          echo "Downloading BookStack"
+          git clone --depth 1 --branch release --single-branch https://github.com/BookStackApp/BookStack.git www
+      fi
+
+      cd www
+      php ../composer.phar install --no-dev --optimize-autoloader --no-interaction --no-progress
+
+      if [ ! -f .env ]; then
+          cp .env.example .env
+          sed -i \
+              -e "s#^APP_URL=.*#APP_URL=${APP_URL}#" \
+              -e "s#^DB_HOST=.*#DB_HOST=${DB_HOST}#" \
+              -e "s#^DB_DATABASE=.*#DB_DATABASE=${DB_DATABASE}#" \
+              -e "s#^DB_USERNAME=.*#DB_USERNAME=${DB_USERNAME}#" \
+              -e "s#^DB_PASSWORD=.*#DB_PASSWORD=\"${DB_PASSWORD}\"#" \
+              -e "s#^APP_KEY=.*#APP_KEY=#" \
+              .env
+          grep -q '^DB_PORT=' .env || sed -i "/^DB_HOST=/a DB_PORT=${DB_PORT}" .env
+          grep -q '^APP_PROXIES=' .env || echo 'APP_PROXIES=127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16' >> .env
+          grep -q '^APP_ENV=' .env || echo 'APP_ENV=production' >> .env
+          grep -q '^APP_DEBUG=' .env || echo 'APP_DEBUG=false' >> .env
+          chmod 600 .env
+      fi
+      cd ..
+
+      if [ ! -f Caddyfile ]; then
+          cat > Caddyfile <<'EOF'
+      {
+          admin off
+          auto_https off
+          persist_config off
+          skip_install_trust
+
+          servers {
+              trusted_proxies static private_ranges
+              client_ip_headers X-Forwarded-For X-Real-IP
+          }
+
+          frankenphp {
+              php_ini memory_limit 256M
+              php_ini upload_max_filesize {$UPLOAD_LIMIT:50M}
+              php_ini post_max_size {$UPLOAD_LIMIT:50M}
+              php_ini expose_php Off
+              php_ini display_errors Off
+              php_ini log_errors On
+              php_ini allow_url_include Off
+              php_ini date.timezone {$TZ:UTC}
+          }
+      }
+
+      :{$SERVER_PORT} {
+          root * /home/container/www/public
+          encode zstd gzip
+          request_body {
+              max_size {$UPLOAD_LIMIT:50M}B
+          }
+
+          header {
+              X-Content-Type-Options "nosniff"
+              X-Frame-Options "SAMEORIGIN"
+              Referrer-Policy "strict-origin-when-cross-origin"
+              Permissions-Policy "camera=(), microphone=(), geolocation=()"
+              -Server
+              -X-Powered-By
+          }
+
+          @hidden {
+              path */.*
+              not path /.well-known/*
+          }
+          @sensitive path *.env *.ini *.log *.sql *.sqlite *.bak *.old *.swp *.lock *.yml *.yaml *.sh *.md composer.json package.json
+          respond @hidden 404
+          respond @sensitive 404
+
+          php_server
+      }
+      EOF
+          ./frankenphp fmt --overwrite Caddyfile
+      fi
+
+      cat > start.sh <<'EOF'
+      #!/bin/bash
+      cd /home/container/www
+      export PATH=/home/container/bin:${PATH} PHP_BINARY=/home/container/bin/php
+
+      if [ "${AUTO_UPDATE}" == "1" ]; then
+          echo "Checking for BookStack updates"
+          git fetch --depth 1 origin release
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/release)" ]; then
+              git reset --hard origin/release
+              php ../composer.phar install --no-dev --optimize-autoloader --no-interaction --no-progress
+              php artisan cache:clear
+              php artisan view:clear
+          fi
+      fi
+
+      if grep -qE '^APP_KEY=\s*$' .env; then
+          php artisan key:generate --force
+      fi
+
+      until php artisan migrate --force; do
+          echo "Database not reachable yet, retrying in 10 seconds"
+          sleep 10
+      done
+
+      cd /home/container
+      exec ./frankenphp run --config Caddyfile --adapter caddyfile
+      EOF
+      chmod 755 start.sh
+
+      echo "-----------------------------------------"
+      echo "BookStack installed"
+      echo "-----------------------------------------"
+    container: 'ghcr.io/pelican-eggs/installers:debian'
+    entrypoint: bash
+variables:
+  -
+    sort: 1
+    name: 'App URL'
+    description: 'Full public URL without a trailing slash, e.g. https://wiki.example.com. Links and cookies depend on it.'
+    env_variable: APP_URL
+    default_value: 'http://127.0.0.1:8080'
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - url
+      - 'regex:/^https?:\/\/[^\s"#]+[^\/]$/'
+  -
+    sort: 2
+    name: 'Database Host'
+    description: 'IP or hostname of the MySQL/MariaDB server.'
+    env_variable: DB_HOST
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - string
+      - 'regex:/^[A-Za-z0-9.\-]+$/'
+  -
+    sort: 3
+    name: 'Database Port'
+    description: ''
+    env_variable: DB_PORT
+    default_value: 3306
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - integer
+      - 'between:1,65535'
+  -
+    sort: 4
+    name: 'Database Name'
+    description: ''
+    env_variable: DB_DATABASE
+    default_value: bookstack
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'regex:/^[A-Za-z0-9_]+$/'
+  -
+    sort: 5
+    name: 'Database User'
+    description: ''
+    env_variable: DB_USERNAME
+    default_value: bookstack
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'regex:/^[A-Za-z0-9_]+$/'
+  -
+    sort: 6
+    name: 'Database Password'
+    description: 'No spaces, quotes, backslashes, $ or #.'
+    env_variable: DB_PASSWORD
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - string
+      - 'regex:/^[^\s"''\\$#`]+$/'
+  -
+    sort: 7
+    name: 'Auto Update'
+    description: 'Update to the newest BookStack release on start (git, composer, migrations).'
+    env_variable: AUTO_UPDATE
+    default_value: 0
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - boolean
+  -
+    sort: 8
+    name: 'Upload Limit'
+    description: 'Largest attachment/image upload, e.g. 50M.'
+    env_variable: UPLOAD_LIMIT
+    default_value: 50M
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'regex:/^[0-9]+[KMG]$/'

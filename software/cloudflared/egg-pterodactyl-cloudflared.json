@@ -1,0 +1,74 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-11-02T21:28:04+00:00",
+    "name": "Cloudflare Tunnel",
+    "author": "barticekk@barticekk.eu",
+    "description": "Runs cloudflared for a remotely managed Cloudflare Tunnel. Publishes websites and HTTP services\nhosted on the node through Cloudflare with HTTPS, without opening inbound ports.",
+    "features": [],
+    "docker_images": {
+        "Debian": "ghcr.io/pelican-eggs/yolks:debian"
+    },
+    "file_denylist": [
+        "cloudflared"
+    ],
+    "startup": "if [ -z \"${TUNNEL_TOKEN}\" ]; then echo \"Set the Tunnel Token variable first, see the egg tutorial.\"; exit 1; fi; exec ./cloudflared tunnel --no-autoupdate --loglevel {{LOG_LEVEL}} --metrics 127.0.0.1:{{SERVER_PORT}} --protocol {{TUNNEL_PROTOCOL}} run",
+    "config": {
+        "files": "{}",
+        "startup": "{\n    \"done\": \"Registered tunnel connection\"\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# cloudflared install script\n#\n# Server Files: /mnt/server\nset -e\ntrap 'echo \"Install failed at line ${LINENO}: ${BASH_COMMAND}\"' ERR\n\napt-get update\napt-get install -y --no-install-recommends curl ca-certificates\n\ncase \"$(uname -m)\" in\n    x86_64) ARCH=amd64 ;;\n    aarch64) ARCH=arm64 ;;\n    *) echo \"Unsupported architecture $(uname -m)\"; exit 1 ;;\nesac\n\nif [ -z \"${CLOUDFLARED_VERSION}\" ] || [ \"${CLOUDFLARED_VERSION}\" == \"latest\" ]; then\n    URL=https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}\nelse\n    URL=https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${ARCH}\nfi\n\necho \"Downloading ${URL}\"\ncurl -fsSL -o /mnt/server/cloudflared \"${URL}\"\nchmod 755 /mnt/server/cloudflared\n/mnt/server/cloudflared --version\n\necho \"-----------------------------------------\"\necho \"cloudflared installed\"\necho \"-----------------------------------------\"",
+            "container": "ghcr.io/pelican-eggs/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Tunnel Token",
+            "description": "Token of a remotely managed tunnel from the Cloudflare Zero Trust dashboard (the long string after --token).",
+            "env_variable": "TUNNEL_TOKEN",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|regex:/^[A-Za-z0-9+\\/=_\\-]+$/|max:2048",
+            "field_type": "text"
+        },
+        {
+            "name": "Protocol",
+            "description": "auto, quic or http2. Use http2 if the node blocks outbound UDP 7844.",
+            "env_variable": "TUNNEL_PROTOCOL",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|in:auto,quic,http2",
+            "field_type": "text"
+        },
+        {
+            "name": "Log Level",
+            "description": "debug, info, warn, error or fatal.",
+            "env_variable": "LOG_LEVEL",
+            "default_value": "info",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|in:debug,info,warn,error,fatal",
+            "field_type": "text"
+        },
+        {
+            "name": "Version",
+            "description": "latest or a release tag such as 2026.10.7. Reinstall to update.",
+            "env_variable": "CLOUDFLARED_VERSION",
+            "default_value": "latest",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|regex:/^(latest|[0-9]{4}\\.[0-9]+\\.[0-9]+)$/",
+            "field_type": "text"
+        }
+    ]
+}

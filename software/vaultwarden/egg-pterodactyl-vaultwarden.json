@@ -1,0 +1,94 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-11-02T21:28:04+00:00",
+    "name": "Vaultwarden",
+    "author": "barticekk@barticekk.eu",
+    "description": "Vaultwarden is a lightweight server compatible with the official Bitwarden apps and browser\nextensions. The static binary and web vault are taken from the official Alpine image on Docker Hub.\nMust be served over HTTPS.",
+    "features": [],
+    "docker_images": {
+        "Debian": "ghcr.io/pelican-eggs/yolks:debian"
+    },
+    "file_denylist": [
+        "vaultwarden"
+    ],
+    "startup": "if [ -z \"${ADMIN_TOKEN}\" ]; then unset ADMIN_TOKEN; fi; ROCKET_ADDRESS=0.0.0.0 ROCKET_PORT={{SERVER_PORT}} DATA_FOLDER=/home/container/data WEB_VAULT_FOLDER=/home/container/web-vault ./vaultwarden",
+    "config": {
+        "files": "{}",
+        "startup": "{\n    \"done\": \"Rocket has launched from\"\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# Vaultwarden install script\n#\n# Server Files: /mnt/server\n# Vaultwarden only ships container images. Their Alpine variant contains a static binary,\n# so the image layers are fetched from Docker Hub and unpacked without Docker.\nset -eo pipefail\ntrap 'echo \"Install failed at line ${LINENO}: ${BASH_COMMAND}\"' ERR\n\napt-get update\napt-get install -y --no-install-recommends curl ca-certificates jq tar gzip\n\ncase \"$(uname -m)\" in\n    x86_64) ARCH=amd64 ;;\n    aarch64) ARCH=arm64 ;;\n    *) echo \"Unsupported architecture $(uname -m)\"; exit 1 ;;\nesac\n\nREPO=vaultwarden/server\nif [ -z \"${VW_VERSION}\" ] || [ \"${VW_VERSION}\" == \"latest\" ]; then\n    TAG=latest-alpine\nelse\n    TAG=${VW_VERSION#v}-alpine\nfi\nREGISTRY=https://registry-1.docker.io/v2/${REPO}\nACCEPT=\"application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json\"\n\nTOKEN=$(curl -fsSL \"https://auth.docker.io/token?service=registry.docker.io&scope=repository:${REPO}:pull\" | jq -r .token)\n\nregistry_get() {\n    curl -fsSL -H \"Authorization: Bearer ${TOKEN}\" -H \"Accept: ${ACCEPT}\" \"$@\"\n}\n\necho \"Resolving ${REPO}:${TAG} for linux/${ARCH}\"\nDIGEST=$(registry_get \"${REGISTRY}/manifests/${TAG}\" \\\n    | jq -r --arg arch \"${ARCH}\" '.manifests[] | select(.platform.os == \"linux\" and .platform.architecture == $arch) | .digest' | head -n1)\nif [ -z \"${DIGEST}\" ]; then\n    echo \"No linux/${ARCH} image found for tag ${TAG}\"\n    exit 1\nfi\n\nMANIFEST=$(registry_get \"${REGISTRY}/manifests/${DIGEST}\")\nVERSION=$(registry_get \"${REGISTRY}/blobs/$(echo \"${MANIFEST}\" | jq -r .config.digest)\" | jq -r '.config.Labels[\"org.opencontainers.image.version\"] // \"unknown\"')\necho \"Vaultwarden ${VERSION}\"\n\nROOTFS=$(mktemp -d)\nfor layer in $(echo \"${MANIFEST}\" | jq -r '.layers[].digest'); do\n    echo \"Fetching layer ${layer}\"\n    registry_get \"${REGISTRY}/blobs/${layer}\" | tar -xz -C \"${ROOTFS}\" --no-same-owner --exclude='dev/*'\ndone\n\nif [ ! -x \"${ROOTFS}/vaultwarden\" ] || [ ! -d \"${ROOTFS}/web-vault\" ]; then\n    echo \"The image layout changed, /vaultwarden or /web-vault is missing\"\n    exit 1\nfi\n\ncd /mnt/server\ninstall -m 755 \"${ROOTFS}/vaultwarden\" vaultwarden\nrm -rf web-vault\ncp -a \"${ROOTFS}/web-vault\" web-vault\nrm -rf \"${ROOTFS}\"\nmkdir -p data\necho \"${VERSION}\" > .vaultwarden-version\n\necho \"-----------------------------------------\"\necho \"Vaultwarden ${VERSION} installed\"\necho \"-----------------------------------------\"",
+            "container": "ghcr.io/pelican-eggs/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Domain",
+            "description": "Public HTTPS URL, e.g. https://vault.example.com. The web vault only works over HTTPS.",
+            "env_variable": "DOMAIN",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|url|starts_with:https://",
+            "field_type": "text"
+        },
+        {
+            "name": "Allow Signups",
+            "description": "Let anyone create an account. Turn off after creating your own accounts and use invitations.",
+            "env_variable": "SIGNUPS_ALLOWED",
+            "default_value": "true",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:true,false",
+            "field_type": "text"
+        },
+        {
+            "name": "Allow Invitations",
+            "description": "Let organisation admins invite new users even when signups are off.",
+            "env_variable": "INVITATIONS_ALLOWED",
+            "default_value": "true",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:true,false",
+            "field_type": "text"
+        },
+        {
+            "name": "Admin Token",
+            "description": "Enables /admin. Use an Argon2 PHC hash from \"./vaultwarden hash\" (starts with $argon2id$). Empty disables the admin page.",
+            "env_variable": "ADMIN_TOKEN",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:255",
+            "field_type": "text"
+        },
+        {
+            "name": "Show Password Hints",
+            "description": "Show password hints on the login page instead of sending them by e-mail.",
+            "env_variable": "SHOW_PASSWORD_HINT",
+            "default_value": "false",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:true,false",
+            "field_type": "text"
+        },
+        {
+            "name": "Version",
+            "description": "latest or a release such as 1.37.5. Reinstall to update; data/ is kept.",
+            "env_variable": "VW_VERSION",
+            "default_value": "latest",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|regex:/^(latest|v?[0-9]+\\.[0-9]+\\.[0-9]+)$/",
+            "field_type": "text"
+        }
+    ]
+}

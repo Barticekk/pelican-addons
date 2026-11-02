@@ -1,0 +1,134 @@
+_comment: 'DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PANEL'
+meta:
+  version: PLCN_v3
+  update_url: null
+exported_at: '2026-11-02T12:00:00+00:00'
+name: Jellyfin
+author: barticekk@barticekk.eu
+uuid: 38a9a4d1-fac0-444d-aab7-213a5f0d969c
+description: |-
+  Jellyfin is a free media server for movies, shows, music and photos with apps for TVs, phones and
+  browsers. Uses the official portable Linux build and jellyfin-ffmpeg. Transcoding runs on the CPU.
+icon: null
+tags:
+  - media
+features: {  }
+docker_images:
+  Debian: 'ghcr.io/pelican-eggs/yolks:debian'
+file_denylist: {  }
+startup_commands:
+  Default: 'LD_LIBRARY_PATH=/home/container/lib FONTCONFIG_FILE=/home/container/lib/fonts.conf DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=0 ./jellyfin/jellyfin --datadir /home/container/data --configdir /home/container/config --cachedir /home/container/cache --logdir /home/container/log --webdir /home/container/jellyfin/jellyfin-web --ffmpeg /home/container/ffmpeg/ffmpeg'
+config:
+  files:
+    config/network.xml:
+      parser: xml
+      find:
+        NetworkConfiguration.InternalHttpPort: '{{server.allocations.default.port}}'
+        NetworkConfiguration.PublicHttpPort: '{{server.allocations.default.port}}'
+  startup:
+    done: 'Startup complete'
+  logs: {  }
+  stop: ^C
+scripts:
+  installation:
+    script: |-
+      #!/bin/bash
+      # Jellyfin install script
+      #
+      # Server Files: /mnt/server
+      set -eo pipefail
+      trap 'echo "Install failed at line ${LINENO}: ${BASH_COMMAND}"' ERR
+
+      apt-get update
+      apt-get install -y --no-install-recommends curl ca-certificates xz-utils libfontconfig1 fonts-dejavu-core
+
+      case "$(uname -m)" in
+          x86_64) ARCH=amd64; FFMPEG_ARCH=linux64 ;;
+          aarch64) ARCH=arm64; FFMPEG_ARCH=linuxarm64 ;;
+          *) echo "Unsupported architecture $(uname -m)"; exit 1 ;;
+      esac
+
+      REPO=https://repo.jellyfin.org/files
+      cd /mnt/server
+
+      if [ -z "${JELLYFIN_VERSION}" ] || [ "${JELLYFIN_VERSION}" == "latest" ]; then
+          SERVER_DIR=${REPO}/server/linux/latest-stable/${ARCH}
+      else
+          SERVER_DIR=${REPO}/server/linux/stable/v${JELLYFIN_VERSION}/${ARCH}
+      fi
+      SERVER_FILE=$(curl -fsSL "${SERVER_DIR}/" | grep -oE "jellyfin_[0-9][0-9.]*-${ARCH}\.tar\.xz" | sort -uV | tail -n1)
+      if [ -z "${SERVER_FILE}" ]; then
+          echo "No Jellyfin build found in ${SERVER_DIR}/"
+          exit 1
+      fi
+      echo "Downloading ${SERVER_FILE}"
+      curl -fsSL -o /tmp/jellyfin.tar.xz "${SERVER_DIR}/${SERVER_FILE}"
+      rm -rf jellyfin
+      tar -xJf /tmp/jellyfin.tar.xz
+      rm -f /tmp/jellyfin.tar.xz
+
+      # newest jellyfin-ffmpeg major that has a portable build for this architecture
+      for MAJOR in $(curl -fsSL "${REPO}/ffmpeg/linux/" | grep -oE 'latest-[0-9]+\.x' | sort -uV -r); do
+          FFMPEG_DIR=${REPO}/ffmpeg/linux/${MAJOR}/${ARCH}
+          FFMPEG_FILE=$(curl -fsSL "${FFMPEG_DIR}/" | grep -oE "jellyfin-ffmpeg_[0-9][^\"]*_portable_${FFMPEG_ARCH}-gpl\.tar\.xz" | sort -uV | tail -n1 || true)
+          [ -n "${FFMPEG_FILE}" ] && break
+      done
+      if [ -z "${FFMPEG_FILE}" ]; then
+          echo "No portable jellyfin-ffmpeg build found"
+          exit 1
+      fi
+      echo "Downloading ${FFMPEG_FILE}"
+      rm -rf ffmpeg
+      mkdir -p ffmpeg
+      curl -fsSL "${FFMPEG_DIR}/${FFMPEG_FILE}" | tar -xJ -C ffmpeg
+
+      # SkiaSharp (image processing) needs fontconfig, which the runtime image does not have
+      LIBDIR=/usr/lib/$(uname -m)-linux-gnu
+      mkdir -p lib/fonts
+      for lib in libfontconfig.so.1 libfreetype.so.6 libpng16.so.16; do
+          cp -L "${LIBDIR}/${lib}" lib/
+      done
+      cp -L /usr/share/fonts/truetype/dejavu/*.ttf lib/fonts/
+      cat > lib/fonts.conf <<'EOF'
+      <?xml version="1.0"?>
+      <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+      <fontconfig>
+          <dir>/home/container/lib/fonts</dir>
+          <dir>/home/container/fonts</dir>
+          <cachedir>/home/container/cache/fontconfig</cachedir>
+      </fontconfig>
+      EOF
+
+      mkdir -p data config cache log media fonts
+      if [ ! -f config/network.xml ]; then
+          cat > config/network.xml <<EOF
+      <?xml version="1.0" encoding="utf-8"?>
+      <NetworkConfiguration xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+        <InternalHttpPort>${SERVER_PORT}</InternalHttpPort>
+        <PublicHttpPort>${SERVER_PORT}</PublicHttpPort>
+        <EnableHttps>false</EnableHttps>
+        <EnableIPv6>false</EnableIPv6>
+        <AutoDiscovery>false</AutoDiscovery>
+        <EnableUPnP>false</EnableUPnP>
+      </NetworkConfiguration>
+      EOF
+      fi
+
+      echo "-----------------------------------------"
+      echo "Installed ${SERVER_FILE} with ${FFMPEG_FILE}"
+      echo "Put media into /home/container/media"
+      echo "-----------------------------------------"
+    container: 'ghcr.io/pelican-eggs/installers:debian'
+    entrypoint: bash
+variables:
+  -
+    sort: 1
+    name: 'Jellyfin Version'
+    description: 'latest or a release such as 10.11.5. Reinstall to update; libraries and settings are kept.'
+    env_variable: JELLYFIN_VERSION
+    default_value: latest
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'regex:/^(latest|[0-9]+\.[0-9]+(\.[0-9]+)?)$/'

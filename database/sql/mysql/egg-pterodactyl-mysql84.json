@@ -1,0 +1,82 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-11-02T21:28:04+00:00",
+    "name": "MySQL 8.4 LTS",
+    "author": "barticekk@barticekk.eu",
+    "description": "MySQL Community Server 8.4 LTS from Oracle's generic Linux build. Many game plugins and frameworks\n(FiveM ESX/QBCore, LuckPerms, CoreProtect) are tested against MySQL rather than MariaDB.",
+    "features": [],
+    "docker_images": {
+        "Debian": "ghcr.io/pelican-eggs/yolks:debian"
+    },
+    "file_denylist": [],
+    "startup": "{ ./mysql/bin/mysqld --defaults-file=/home/container/.my.cnf --innodb-buffer-pool-size=$(( ({{SERVER_MEMORY}} + 256) / 2 ))M & } && until ./mysql/bin/mysqladmin --defaults-extra-file=/home/container/.root.cnf ping --silent 2>/dev/null; do sleep 1; done && ./mysql/bin/mysql --defaults-extra-file=/home/container/.root.cnf --batch --unbuffered --table --force; wait",
+    "config": {
+        "files": "{\n    \".my.cnf\": {\n        \"parser\": \"file\",\n        \"find\": {\n            \"port\": \"port = {{server.allocations.default.port}}\"\n        }\n    }\n}",
+        "startup": "{\n    \"done\": \"ready for connections\"\n}",
+        "logs": "{}",
+        "stop": "shutdown; exit;"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# MySQL 8.4 LTS install script\n#\n# Server Files: /mnt/server\nset -eo pipefail\ntrap 'echo \"Install failed at line ${LINENO}: ${BASH_COMMAND}\"' ERR\n\napt-get update\napt-get install -y --no-install-recommends curl ca-certificates xz-utils libaio1 libnuma1 libncurses6\n\nif [ \"$(uname -m)\" != \"x86_64\" ]; then\n    echo \"Oracle only publishes the minimal generic build for x86_64. ARM nodes are not supported by this egg.\"\n    exit 1\nfi\n\nCDN=https://cdn.mysql.com/Downloads/MySQL-8.4\nARCHIVE=https://downloads.mysql.com/archives/get/p/23/file\n\ntarball_name() {\n    echo \"mysql-$1-linux-glibc2.28-x86_64-minimal.tar.xz\"\n}\n\nif [ -z \"${MYSQL_VERSION}\" ] || [ \"${MYSQL_VERSION}\" == \"latest\" ]; then\n    # the CDN only keeps current releases, so the newest patch that answers is the latest one\n    for patch in $(seq 40 -1 0); do\n        if curl -sfI \"${CDN}/$(tarball_name 8.4.${patch})\" > /dev/null; then\n            MYSQL_VERSION=8.4.${patch}\n            break\n        fi\n    done\n    if [ -z \"${MYSQL_VERSION}\" ] || [ \"${MYSQL_VERSION}\" == \"latest\" ]; then\n        echo \"Could not find a MySQL 8.4 release on ${CDN}\"\n        exit 1\n    fi\nfi\n\nFILE=$(tarball_name \"${MYSQL_VERSION}\")\necho \"Installing MySQL ${MYSQL_VERSION}\"\ncd /tmp\ncurl -fsSL -o mysql.tar.xz \"${CDN}/${FILE}\" || curl -fsSL -o mysql.tar.xz \"${ARCHIVE}/${FILE}\"\n\nrm -rf /mnt/server/mysql\nmkdir -p /mnt/server/mysql\ntar -xJf mysql.tar.xz -C /mnt/server/mysql --strip-components=1\nrm -f mysql.tar.xz\nrm -rf /mnt/server/mysql/{docs,man,include}\n\n# libaio, libnuma and libncurses are missing from the runtime image; the binaries already look in lib/private\nfor lib in libaio.so.1 libnuma.so.1 libncurses.so.6; do\n    cp -L \"/usr/lib/x86_64-linux-gnu/${lib}\" /mnt/server/mysql/lib/private/\ndone\n\nmkdir -p /mnt/server/data /mnt/server/run /mnt/server/tmp\nchmod 750 /mnt/server/tmp\n\nif [ ! -f /mnt/server/.my.cnf ]; then\n    cat > /mnt/server/.my.cnf <<EOF\n[mysqld]\nbasedir = /home/container/mysql\ndatadir = /home/container/data\nsocket = /home/container/run/mysqld.sock\npid-file = /home/container/run/mysqld.pid\ntmpdir = /home/container/tmp\nport = ${SERVER_PORT}\nbind-address = 0.0.0.0\nmysqlx = OFF\nskip-name-resolve\nlocal-infile = 0\nsecure-file-priv = /home/container/tmp\ncharacter-set-server = utf8mb4\ncollation-server = utf8mb4_0900_ai_ci\nmax_connections = 151\nlog-error-verbosity = 2\n\n[client]\nsocket = /home/container/run/mysqld.sock\nEOF\nfi\n\nif [ -d /mnt/server/data/mysql ]; then\n    echo \"Existing data directory found, keeping it. MySQL upgrades it on the next start.\"\nelse\n    echo \"Initializing a new data directory\"\n    INIT_CNF=/tmp/init.cnf\n    sed -e 's#/home/container#/mnt/server#g' /mnt/server/.my.cnf > \"${INIT_CNF}\"\n    /mnt/server/mysql/bin/mysqld --defaults-file=\"${INIT_CNF}\" --user=root --initialize-insecure\n\n    /mnt/server/mysql/bin/mysqld --defaults-file=\"${INIT_CNF}\" --user=root --skip-networking &\n    for _ in $(seq 1 60); do\n        /mnt/server/mysql/bin/mysqladmin --socket=/mnt/server/run/mysqld.sock -uroot ping --silent 2>/dev/null && break\n        sleep 1\n    done\n\n    {\n        echo \"ALTER USER 'root'@'localhost' IDENTIFIED BY '${ROOT_PASSWORD}';\"\n        echo \"DROP USER IF EXISTS 'root'@'%';\"\n        if [ -n \"${DB_NAME}\" ]; then\n            echo \"CREATE DATABASE IF NOT EXISTS \\`${DB_NAME}\\`;\"\n        fi\n        if [ -n \"${DB_USER}\" ] && [ -n \"${DB_PASSWORD}\" ]; then\n            echo \"CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASSWORD}';\"\n            if [ -n \"${DB_NAME}\" ]; then\n                echo \"GRANT ALL PRIVILEGES ON \\`${DB_NAME}\\`.* TO '${DB_USER}'@'%';\"\n            fi\n        fi\n        echo \"FLUSH PRIVILEGES;\"\n    } | /mnt/server/mysql/bin/mysql --socket=/mnt/server/run/mysqld.sock -uroot\n\n    /mnt/server/mysql/bin/mysqladmin --socket=/mnt/server/run/mysqld.sock -uroot -p\"${ROOT_PASSWORD}\" shutdown 2>/dev/null\n    wait\n    rm -f \"${INIT_CNF}\"\nfi\n\n# the console logs in as root through this file, so the panel console works without typing a password\ncat > /mnt/server/.root.cnf <<EOF\n[client]\nuser = root\npassword = \"${ROOT_PASSWORD}\"\nsocket = /home/container/run/mysqld.sock\nEOF\nchmod 600 /mnt/server/.root.cnf /mnt/server/.my.cnf\n\necho \"-----------------------------------------\"\necho \"MySQL ${MYSQL_VERSION} installed\"\necho \"-----------------------------------------\"",
+            "container": "ghcr.io/pelican-eggs/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "MySQL Version",
+            "description": "latest picks the newest 8.4 release, or pin one such as 8.4.13. Reinstall to upgrade; the data directory is kept.",
+            "env_variable": "MYSQL_VERSION",
+            "default_value": "latest",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|regex:/^(latest|8\\.4\\.[0-9]+)$/",
+            "field_type": "text"
+        },
+        {
+            "name": "Root Password",
+            "description": "Password for root@localhost. Only used when the data directory is created; change it later with ALTER USER.",
+            "env_variable": "ROOT_PASSWORD",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|min:12|max:64|regex:/^[^\\s\"'\\\\`]+$/",
+            "field_type": "text"
+        },
+        {
+            "name": "Database Name",
+            "description": "Optional database created on first install.",
+            "env_variable": "DB_NAME",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|regex:/^[A-Za-z0-9_]+$/|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Database User",
+            "description": "Optional remote user (host %) created on first install with full rights on the database above.",
+            "env_variable": "DB_USER",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|regex:/^[A-Za-z0-9_]+$/|max:32",
+            "field_type": "text"
+        },
+        {
+            "name": "Database Password",
+            "description": "Password for the user above.",
+            "env_variable": "DB_PASSWORD",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|min:12|max:64|regex:/^[^\\s\"'\\\\`]+$/",
+            "field_type": "text"
+        }
+    ]
+}

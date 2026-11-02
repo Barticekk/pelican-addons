@@ -1,0 +1,138 @@
+_comment: 'DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PANEL'
+meta:
+  version: PLCN_v3
+  update_url: null
+exported_at: '2026-11-02T12:00:00+00:00'
+name: Syncthing
+author: barticekk@barticekk.eu
+uuid: 6919b345-2389-4b5a-915a-21b926f82fb1
+description: |-
+  Syncthing continuously synchronises folders between devices, peer to peer and encrypted. Useful for
+  off-site backups of server worlds, sharing configs between nodes, or a private Dropbox replacement.
+icon: null
+tags:
+  - storage
+  - backup
+features: {  }
+docker_images:
+  Debian: 'ghcr.io/pelican-eggs/yolks:debian'
+file_denylist:
+  - syncthing
+startup_commands:
+  Default: './syncthing serve --home=/home/container/config --gui-address=http://0.0.0.0:{{SERVER_PORT}} --no-browser --no-upgrade --no-restart'
+config:
+  files:
+    config/config.xml:
+      parser: xml
+      find:
+        configuration.options.listenAddress: 'tcp://0.0.0.0:{{server.environment.SYNC_PORT}}'
+        configuration.options.natEnabled: 'false'
+        configuration.options.localAnnounceEnabled: 'false'
+  startup:
+    done: 'GUI and API listening'
+  logs: {  }
+  stop: ^C
+scripts:
+  installation:
+    script: |-
+      #!/bin/bash
+      # Syncthing install script
+      #
+      # Server Files: /mnt/server
+      set -eo pipefail
+      trap 'echo "Install failed at line ${LINENO}: ${BASH_COMMAND}"' ERR
+
+      apt-get update
+      apt-get install -y --no-install-recommends curl ca-certificates
+
+      case "$(uname -m)" in
+          x86_64) ARCH=amd64 ;;
+          aarch64) ARCH=arm64 ;;
+          *) echo "Unsupported architecture $(uname -m)"; exit 1 ;;
+      esac
+
+      # the official apt repository always carries the current v2 release for every architecture
+      REPO=https://apt.syncthing.net
+      DEB=$(curl -fsSL "${REPO}/dists/syncthing/stable-v2/binary-${ARCH}/Packages" \
+          | awk -v want="${SYNCTHING_VERSION}" '
+              /^Package: / { pkg = $2 }
+              /^Version: / { ver = $2 }
+              /^Filename: / && pkg == "syncthing" && (want == "" || want == "latest" || ver == want) { file = $2 }
+              END { print file }')
+      if [ -z "${DEB}" ]; then
+          echo "Syncthing ${SYNCTHING_VERSION} not found in ${REPO}"
+          exit 1
+      fi
+
+      echo "Downloading ${DEB}"
+      curl -fsSL -o /tmp/syncthing.deb "${REPO}/${DEB}"
+      rm -rf /tmp/syncthing
+      dpkg-deb -x /tmp/syncthing.deb /tmp/syncthing
+      install -m 755 /tmp/syncthing/usr/bin/syncthing /mnt/server/syncthing
+      rm -rf /tmp/syncthing /tmp/syncthing.deb
+      /mnt/server/syncthing --version
+
+      cd /mnt/server
+      mkdir -p data
+      if [ ! -f config/config.xml ]; then
+          echo "Generating keys and configuration"
+          printf '%s' "${GUI_PASSWORD}" | STNODEFAULTFOLDER=1 ./syncthing generate --home=/mnt/server/config \
+              --gui-user="${GUI_USER}" --gui-password=- --no-port-probing
+          sed -i "s#<listenAddress>default</listenAddress>#<listenAddress>tcp://0.0.0.0:${SYNC_PORT}</listenAddress>#" config/config.xml
+          echo "Device ID: $(./syncthing device-id --home=/mnt/server/config)"
+      fi
+
+      echo "-----------------------------------------"
+      echo "Syncthing installed"
+      echo "-----------------------------------------"
+    container: 'ghcr.io/pelican-eggs/installers:debian'
+    entrypoint: bash
+variables:
+  -
+    sort: 1
+    name: 'GUI User'
+    description: 'Login for the web interface. Only applied on the first install; change it later in the GUI.'
+    env_variable: GUI_USER
+    default_value: admin
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'regex:/^[A-Za-z0-9._\-]+$/'
+      - 'max:32'
+  -
+    sort: 2
+    name: 'GUI Password'
+    description: 'Password for the web interface (stored as a bcrypt hash). Only applied on the first install.'
+    env_variable: GUI_PASSWORD
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - string
+      - 'min:12'
+      - 'max:128'
+  -
+    sort: 3
+    name: 'Sync Port'
+    description: 'Must be an additional allocation of this server (TCP). Other devices connect to it.'
+    env_variable: SYNC_PORT
+    default_value: 22000
+    user_viewable: true
+    user_editable: false
+    rules:
+      - required
+      - integer
+      - 'between:1024,65535'
+  -
+    sort: 4
+    name: Version
+    description: 'latest or a release such as 2.1.6. Reinstall to update; config and folders are kept.'
+    env_variable: SYNCTHING_VERSION
+    default_value: latest
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'regex:/^(latest|[0-9]+\.[0-9]+\.[0-9]+)$/'

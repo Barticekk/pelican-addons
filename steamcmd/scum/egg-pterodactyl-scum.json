@@ -1,0 +1,155 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-11-02T21:28:04+00:00",
+    "name": "SCUM",
+    "author": "barticekk@barticekk.eu",
+    "description": "SCUM is an open world survival game with deep character customisation and a prison island setting.\nThe official dedicated server is Windows only and runs here under Wine. Players connect to the\ngame port + 2.",
+    "features": [
+        "steam_disk_space"
+    ],
+    "docker_images": {
+        "Wine Staging": "ghcr.io/pelican-eggs/yolks:wine_staging",
+        "Wine Latest": "ghcr.io/pelican-eggs/yolks:wine_latest"
+    },
+    "file_denylist": [],
+    "startup": "mkdir -p SCUM/Saved/Logs && touch SCUM/Saved/Logs/SCUM.log && wine ./SCUM/Binaries/Win64/SCUMServer.exe -Port={{SERVER_PORT}} -QueryPort={{QUERY_PORT}} -MaxPlayers={{MAX_PLAYERS}} $( [ \"{{NO_BATTLEYE}}\" == \"1\" ] && printf %s -nobattleye ) & tail -c0 -F ./SCUM/Saved/Logs/SCUM.log --pid=$!",
+    "config": {
+        "files": "{\n    \"SCUM/Saved/Config/WindowsServer/ServerSettings.ini\": {\n        \"parser\": \"ini\",\n        \"find\": {\n            \"General.[scum.ServerName]\": \"{{server.environment.SERVER_NAME}}\",\n            \"General.[scum.ServerDescription]\": \"{{server.environment.SERVER_DESCRIPTION}}\",\n            \"General.[scum.ServerPassword]\": \"{{server.environment.SERVER_PASSWORD}}\",\n            \"General.[scum.ServerPlaystyle]\": \"{{server.environment.SERVER_PLAYSTYLE}}\",\n            \"General.[scum.MaxPlayers]\": \"{{server.environment.MAX_PLAYERS}}\"\n        }\n    }\n}",
+        "startup": "{\n    \"done\": \"Config entry: GameID scum\"\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# SCUM install script (SteamCMD, Windows depot)\n#\n# Server Files: /mnt/server\nset -e\ntrap 'echo \"Install failed at line ${LINENO}: ${BASH_COMMAND}\"' ERR\n\nif [ -z \"${STEAM_USER}\" ] || [ -z \"${STEAM_PASS}\" ]; then\n    echo \"Using anonymous Steam login\"\n    STEAM_USER=anonymous\n    STEAM_PASS=\"\"\n    STEAM_AUTH=\"\"\nfi\n\ncd /tmp\nmkdir -p /mnt/server/steamcmd /mnt/server/steamapps\ncurl -fsSL -o steamcmd.tar.gz https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\ntar -xzf steamcmd.tar.gz -C /mnt/server/steamcmd\ncd /mnt/server/steamcmd\n\nchown -R root:root /mnt\nexport HOME=/mnt/server\n\n./steamcmd.sh +force_install_dir /mnt/server +login ${STEAM_USER} ${STEAM_PASS} ${STEAM_AUTH} \\\n    +@sSteamCmdForcePlatformType windows +app_update ${SRCDS_APPID} ${INSTALL_FLAGS} validate +quit\n\nmkdir -p /mnt/server/.steam/sdk32 /mnt/server/.steam/sdk64\ncp -v linux32/steamclient.so /mnt/server/.steam/sdk32/steamclient.so\ncp -v linux64/steamclient.so /mnt/server/.steam/sdk64/steamclient.so\n\nif [ ! -f /mnt/server/SCUM/Binaries/Win64/SCUMServer.exe ]; then\n    echo \"SCUMServer.exe is missing, the SteamCMD download did not finish. Run the install again.\"\n    exit 1\nfi\n\nmkdir -p /mnt/server/SCUM/Saved/Config/WindowsServer /mnt/server/SCUM/Saved/Logs\n# the panel fills these keys in on every start; the server adds the rest on first boot\nif [ ! -f /mnt/server/SCUM/Saved/Config/WindowsServer/ServerSettings.ini ]; then\n    cat > /mnt/server/SCUM/Saved/Config/WindowsServer/ServerSettings.ini <<EOF\n[General]\nscum.ServerName=${SERVER_NAME}\nscum.ServerDescription=${SERVER_DESCRIPTION}\nscum.ServerPassword=${SERVER_PASSWORD}\nscum.ServerPlaystyle=${SERVER_PLAYSTYLE}\nscum.MaxPlayers=${MAX_PLAYERS}\nEOF\nfi\n\necho \"-----------------------------------------\"\necho \"SCUM server installed\"\necho \"-----------------------------------------\"",
+            "container": "ghcr.io/pelican-eggs/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Server Name",
+            "description": "Name in the server browser.",
+            "env_variable": "SERVER_NAME",
+            "default_value": "A Pelican hosted SCUM server",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Server Description",
+            "description": "",
+            "env_variable": "SERVER_DESCRIPTION",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:256",
+            "field_type": "text"
+        },
+        {
+            "name": "Server Password",
+            "description": "Empty for a public server.",
+            "env_variable": "SERVER_PASSWORD",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|alpha_dash|max:30",
+            "field_type": "text"
+        },
+        {
+            "name": "Max Players",
+            "description": "",
+            "env_variable": "MAX_PLAYERS",
+            "default_value": "32",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|between:1,128",
+            "field_type": "text"
+        },
+        {
+            "name": "Playstyle",
+            "description": "PVP or PVE (shown in the browser).",
+            "env_variable": "SERVER_PLAYSTYLE",
+            "default_value": "PVP",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|in:PVP,PVE",
+            "field_type": "text"
+        },
+        {
+            "name": "Query Port",
+            "description": "Steam query port. Must be an extra allocation and outside 27020-27050.",
+            "env_variable": "QUERY_PORT",
+            "default_value": "27015",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|integer|between:1024,65535",
+            "field_type": "text"
+        },
+        {
+            "name": "Disable BattlEye",
+            "description": "Start without BattlEye. Not recommended for public servers.",
+            "env_variable": "NO_BATTLEYE",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Update",
+            "description": "Check for server updates with SteamCMD on every start.",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "App ID",
+            "description": "",
+            "env_variable": "SRCDS_APPID",
+            "default_value": "3792580",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|in:3792580",
+            "field_type": "text"
+        },
+        {
+            "name": "Windows Install",
+            "description": "",
+            "env_variable": "WINDOWS_INSTALL",
+            "default_value": "1",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|in:1",
+            "field_type": "text"
+        },
+        {
+            "name": "Wine Debug",
+            "description": "",
+            "env_variable": "WINEDEBUG",
+            "default_value": "-all",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Winetricks",
+            "description": "Space separated winetricks verbs installed on start, e.g. vcrun2022.",
+            "env_variable": "WINETRICKS_RUN",
+            "default_value": "vcrun2022",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "nullable|string",
+            "field_type": "text"
+        }
+    ]
+}

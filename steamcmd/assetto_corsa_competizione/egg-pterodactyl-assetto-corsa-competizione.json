@@ -1,0 +1,155 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-11-02T21:28:04+00:00",
+    "name": "Assetto Corsa Competizione",
+    "author": "barticekk@barticekk.eu",
+    "description": "Official GT World Challenge sim racing game by Kunos Simulazioni. The Windows dedicated server runs\nunder Wine. Downloading it needs a Steam account that owns ACC. Configs are edited as UTF-8 in\nacc-config/ and converted for the server on every start.",
+    "features": [
+        "steam_disk_space"
+    ],
+    "docker_images": {
+        "Wine Latest": "ghcr.io/pelican-eggs/yolks:wine_latest",
+        "Wine Staging": "ghcr.io/pelican-eggs/yolks:wine_staging"
+    },
+    "file_denylist": [],
+    "startup": "if [ ! -f start.sh ]; then echo \"start.sh is missing: the installation did not finish. Reinstall the server and check the install output for the line starting with Install failed.\"; exit 1; fi; bash ./start.sh",
+    "config": {
+        "files": "{}",
+        "startup": "{\n    \"done\": \"Server starting with version\"\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# Assetto Corsa Competizione install script (SteamCMD, Windows depot, owned account)\n#\n# Server Files: /mnt/server\nset -e\ntrap 'echo \"Install failed at line ${LINENO}: ${BASH_COMMAND}\"' ERR\n\nif [ -z \"${STEAM_USER}\" ] || [ \"${STEAM_USER}\" == \"anonymous\" ]; then\n    echo \"The ACC dedicated server can only be downloaded by a Steam account that owns ACC.\"\n    echo \"Set Steam Username and Steam Password, then reinstall.\"\n    exit 1\nfi\n\ncd /tmp\nmkdir -p /mnt/server/steamcmd /mnt/server/steamapps\ncurl -fsSL -o steamcmd.tar.gz https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\ntar -xzf steamcmd.tar.gz -C /mnt/server/steamcmd\ncd /mnt/server/steamcmd\n\nchown -R root:root /mnt\nexport HOME=/mnt/server\n\n./steamcmd.sh +force_install_dir /mnt/server +login \"${STEAM_USER}\" \"${STEAM_PASS}\" ${STEAM_AUTH} \\\n    +@sSteamCmdForcePlatformType windows +app_update ${SRCDS_APPID} validate +quit\n\nmkdir -p /mnt/server/.steam/sdk32 /mnt/server/.steam/sdk64\ncp -v linux32/steamclient.so /mnt/server/.steam/sdk32/steamclient.so\ncp -v linux64/steamclient.so /mnt/server/.steam/sdk64/steamclient.so\n\nif [ ! -f /mnt/server/server/accServer.exe ]; then\n    echo \"server/accServer.exe is missing. Check the Steam login (Steam Guard code) and reinstall.\"\n    exit 1\nfi\n\ncd /mnt/server\nmkdir -p acc-config server/cfg\n\nif [ ! -f acc-config/settings.json ]; then\n    cat > acc-config/settings.json <<EOF\n{\n    \"serverName\": \"${SERVER_NAME}\",\n    \"adminPassword\": \"${ADMIN_PASSWORD}\",\n    \"password\": \"${SERVER_PASSWORD}\",\n    \"spectatorPassword\": \"\",\n    \"carGroup\": \"GT3\",\n    \"trackMedalsRequirement\": 0,\n    \"safetyRatingRequirement\": -1,\n    \"racecraftRatingRequirement\": -1,\n    \"maxCarSlots\": 30,\n    \"isRaceLocked\": 1,\n    \"dumpLeaderboards\": 1,\n    \"allowAutoDQ\": 1,\n    \"shortFormationLap\": 0,\n    \"formationLapType\": 3,\n    \"randomizeTrackWhenEmpty\": 0,\n    \"ignorePrematureDisconnects\": 0,\n    \"configVersion\": 1\n}\nEOF\nfi\n\nif [ ! -f acc-config/event.json ]; then\n    cat > acc-config/event.json <<'EOF'\n{\n    \"track\": \"monza\",\n    \"preRaceWaitingTimeSeconds\": 80,\n    \"sessionOverTimeSeconds\": 120,\n    \"ambientTemp\": 22,\n    \"cloudLevel\": 0.1,\n    \"rain\": 0.0,\n    \"weatherRandomness\": 1,\n    \"sessions\": [\n        { \"hourOfDay\": 10, \"dayOfWeekend\": 2, \"timeMultiplier\": 1, \"sessionType\": \"P\", \"sessionDurationMinutes\": 20 },\n        { \"hourOfDay\": 14, \"dayOfWeekend\": 3, \"timeMultiplier\": 1, \"sessionType\": \"Q\", \"sessionDurationMinutes\": 10 },\n        { \"hourOfDay\": 16, \"dayOfWeekend\": 3, \"timeMultiplier\": 2, \"sessionType\": \"R\", \"sessionDurationMinutes\": 20 }\n    ],\n    \"configVersion\": 1\n}\nEOF\nfi\n\nif [ ! -f acc-config/assistRules.json ]; then\n    cat > acc-config/assistRules.json <<'EOF'\n{\n    \"stabilityControlLevelMax\": 100,\n    \"disableAutosteer\": 1,\n    \"disableAutoLights\": 0,\n    \"disableAutoWiper\": 0,\n    \"disableAutoEngineStart\": 0,\n    \"disableAutoPitLimiter\": 0,\n    \"disableAutoGear\": 0,\n    \"disableAutoClutch\": 0,\n    \"disableIdealLine\": 0\n}\nEOF\nfi\n\n# accServer reads UTF-16 LE; configuration.json is rebuilt from the panel variables every start\ncat > start.sh <<'EOF'\n#!/bin/bash\ncd /home/container\n\nto_utf16() {\n    { printf '\\xff\\xfe'; iconv -f UTF-8 -t UTF-16LE \"$1\"; } > \"$2\"\n}\n\ncat > acc-config/configuration.json <<JSON\n{\n    \"udpPort\": ${SERVER_PORT},\n    \"tcpPort\": ${SERVER_PORT},\n    \"maxConnections\": ${MAX_CONNECTIONS},\n    \"lanDiscovery\": 0,\n    \"registerToLobby\": ${REGISTER_TO_LOBBY},\n    \"publicIP\": \"${PUBLIC_IP}\",\n    \"configVersion\": 1\n}\nJSON\nif [ -z \"${PUBLIC_IP}\" ]; then\n    sed -i '/\"publicIP\"/d' acc-config/configuration.json\nfi\n\nfor file in acc-config/*.json; do\n    to_utf16 \"${file}\" \"server/cfg/$(basename \"${file}\")\" || { echo \"Could not convert ${file}\"; exit 1; }\ndone\n\ncd server\nexec wine accServer.exe\nEOF\nchmod 755 start.sh\n\necho \"-----------------------------------------\"\necho \"ACC server installed, edit acc-config/*.json\"\necho \"-----------------------------------------\"",
+            "container": "ghcr.io/pelican-eggs/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Steam Username",
+            "description": "Steam account that owns Assetto Corsa Competizione. A separate account is recommended.",
+            "env_variable": "STEAM_USER",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Steam Password",
+            "description": "",
+            "env_variable": "STEAM_PASS",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Steam Guard Code",
+            "description": "E-mail Steam Guard code for the first install. Leave empty when approving in the Steam mobile app.",
+            "env_variable": "STEAM_AUTH",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|regex:/^[A-Za-z0-9]{5}$/",
+            "field_type": "text"
+        },
+        {
+            "name": "Server Name",
+            "description": "Initial value written to acc-config/settings.json on the first install.",
+            "env_variable": "SERVER_NAME",
+            "default_value": "Pelican ACC Server",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|regex:/^[^\"\\\\]+$/|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Admin Password",
+            "description": "Initial admin password (type /admin <password> in the in-game chat). First install only.",
+            "env_variable": "ADMIN_PASSWORD",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|regex:/^[A-Za-z0-9_\\-!.@]+$/|max:32",
+            "field_type": "text"
+        },
+        {
+            "name": "Join Password",
+            "description": "Initial join password, empty for public. First install only.",
+            "env_variable": "SERVER_PASSWORD",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|regex:/^[A-Za-z0-9_\\-!.@]+$/|max:32",
+            "field_type": "text"
+        },
+        {
+            "name": "Max Connections",
+            "description": "Drivers plus spectators that can connect.",
+            "env_variable": "MAX_CONNECTIONS",
+            "default_value": "30",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|between:1,100",
+            "field_type": "text"
+        },
+        {
+            "name": "Register To Lobby",
+            "description": "1 lists the server in the public lobby, 0 for private (direct IP) only.",
+            "env_variable": "REGISTER_TO_LOBBY",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|in:0,1",
+            "field_type": "text"
+        },
+        {
+            "name": "Public IP",
+            "description": "Only needed when the allocation uses a private IP behind NAT.",
+            "env_variable": "PUBLIC_IP",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|ipv4",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Update",
+            "description": "Check for server updates on start (uses the stored Steam login).",
+            "env_variable": "AUTO_UPDATE",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "App ID",
+            "description": "",
+            "env_variable": "SRCDS_APPID",
+            "default_value": "1430110",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|in:1430110",
+            "field_type": "text"
+        },
+        {
+            "name": "Windows Install",
+            "description": "",
+            "env_variable": "WINDOWS_INSTALL",
+            "default_value": "1",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|in:1",
+            "field_type": "text"
+        }
+    ]
+}

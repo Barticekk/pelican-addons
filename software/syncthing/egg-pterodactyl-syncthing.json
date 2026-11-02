@@ -1,0 +1,74 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-11-02T21:28:04+00:00",
+    "name": "Syncthing",
+    "author": "barticekk@barticekk.eu",
+    "description": "Syncthing continuously synchronises folders between devices, peer to peer and encrypted. Useful for\noff-site backups of server worlds, sharing configs between nodes, or a private Dropbox replacement.",
+    "features": [],
+    "docker_images": {
+        "Debian": "ghcr.io/pelican-eggs/yolks:debian"
+    },
+    "file_denylist": [
+        "syncthing"
+    ],
+    "startup": "./syncthing serve --home=/home/container/config --gui-address=http://0.0.0.0:{{SERVER_PORT}} --no-browser --no-upgrade --no-restart",
+    "config": {
+        "files": "{\n    \"config/config.xml\": {\n        \"parser\": \"xml\",\n        \"find\": {\n            \"configuration.options.listenAddress\": \"tcp://0.0.0.0:{{server.environment.SYNC_PORT}}\",\n            \"configuration.options.natEnabled\": \"false\",\n            \"configuration.options.localAnnounceEnabled\": \"false\"\n        }\n    }\n}",
+        "startup": "{\n    \"done\": \"GUI and API listening\"\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# Syncthing install script\n#\n# Server Files: /mnt/server\nset -eo pipefail\ntrap 'echo \"Install failed at line ${LINENO}: ${BASH_COMMAND}\"' ERR\n\napt-get update\napt-get install -y --no-install-recommends curl ca-certificates\n\ncase \"$(uname -m)\" in\n    x86_64) ARCH=amd64 ;;\n    aarch64) ARCH=arm64 ;;\n    *) echo \"Unsupported architecture $(uname -m)\"; exit 1 ;;\nesac\n\n# the official apt repository always carries the current v2 release for every architecture\nREPO=https://apt.syncthing.net\nDEB=$(curl -fsSL \"${REPO}/dists/syncthing/stable-v2/binary-${ARCH}/Packages\" \\\n    | awk -v want=\"${SYNCTHING_VERSION}\" '\n        /^Package: / { pkg = $2 }\n        /^Version: / { ver = $2 }\n        /^Filename: / && pkg == \"syncthing\" && (want == \"\" || want == \"latest\" || ver == want) { file = $2 }\n        END { print file }')\nif [ -z \"${DEB}\" ]; then\n    echo \"Syncthing ${SYNCTHING_VERSION} not found in ${REPO}\"\n    exit 1\nfi\n\necho \"Downloading ${DEB}\"\ncurl -fsSL -o /tmp/syncthing.deb \"${REPO}/${DEB}\"\nrm -rf /tmp/syncthing\ndpkg-deb -x /tmp/syncthing.deb /tmp/syncthing\ninstall -m 755 /tmp/syncthing/usr/bin/syncthing /mnt/server/syncthing\nrm -rf /tmp/syncthing /tmp/syncthing.deb\n/mnt/server/syncthing --version\n\ncd /mnt/server\nmkdir -p data\nif [ ! -f config/config.xml ]; then\n    echo \"Generating keys and configuration\"\n    printf '%s' \"${GUI_PASSWORD}\" | STNODEFAULTFOLDER=1 ./syncthing generate --home=/mnt/server/config \\\n        --gui-user=\"${GUI_USER}\" --gui-password=- --no-port-probing\n    sed -i \"s#<listenAddress>default</listenAddress>#<listenAddress>tcp://0.0.0.0:${SYNC_PORT}</listenAddress>#\" config/config.xml\n    echo \"Device ID: $(./syncthing device-id --home=/mnt/server/config)\"\nfi\n\necho \"-----------------------------------------\"\necho \"Syncthing installed\"\necho \"-----------------------------------------\"",
+            "container": "ghcr.io/pelican-eggs/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "GUI User",
+            "description": "Login for the web interface. Only applied on the first install; change it later in the GUI.",
+            "env_variable": "GUI_USER",
+            "default_value": "admin",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|regex:/^[A-Za-z0-9._\\-]+$/|max:32",
+            "field_type": "text"
+        },
+        {
+            "name": "GUI Password",
+            "description": "Password for the web interface (stored as a bcrypt hash). Only applied on the first install.",
+            "env_variable": "GUI_PASSWORD",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|min:12|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Sync Port",
+            "description": "Must be an additional allocation of this server (TCP). Other devices connect to it.",
+            "env_variable": "SYNC_PORT",
+            "default_value": "22000",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|integer|between:1024,65535",
+            "field_type": "text"
+        },
+        {
+            "name": "Version",
+            "description": "latest or a release such as 2.1.6. Reinstall to update; config and folders are kept.",
+            "env_variable": "SYNCTHING_VERSION",
+            "default_value": "latest",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|regex:/^(latest|[0-9]+\\.[0-9]+\\.[0-9]+)$/",
+            "field_type": "text"
+        }
+    ]
+}

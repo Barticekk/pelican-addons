@@ -1,0 +1,83 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-11-02T21:28:04+00:00",
+    "name": "Farming Simulator 25 (experimental)",
+    "author": "barticekk@barticekk.eu",
+    "description": "Experimental: runs the Farming Simulator 25 dedicated server tool (dedicatedServer.exe and its web\ninterface) under Wine with a virtual display. GIANTS only supports Windows; you upload your own\ninstalled and licensed copy of the game.",
+    "features": [],
+    "docker_images": {
+        "Wine Latest": "ghcr.io/pelican-eggs/yolks:wine_latest",
+        "Wine Staging": "ghcr.io/pelican-eggs/yolks:wine_staging"
+    },
+    "file_denylist": [],
+    "startup": "if [ ! -f start.sh ]; then echo \"start.sh is missing: the installation did not finish. Reinstall the server and check the install output for the line starting with Install failed.\"; exit 1; fi; bash ./start.sh",
+    "config": {
+        "files": "{}",
+        "startup": "{\n    \"done\": \"web interface on port\"\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# Farming Simulator 25 (experimental) install script\n#\n# Server Files: /mnt/server\n# Nothing can be downloaded: the game is uploaded by the user. This prepares folders and the start script.\nset -e\ntrap 'echo \"Install failed at line ${LINENO}: ${BASH_COMMAND}\"' ERR\n\ncd /mnt/server\nmkdir -p game logs\n\ncat > start.sh <<'EOF'\n#!/bin/bash\ncd /home/container\n\nif [ ! -f game/dedicatedServer.exe ]; then\n    echo \"game/dedicatedServer.exe not found.\"\n    echo \"Upload your installed Farming Simulator 25 folder into game/ (see the egg tutorial).\"\n    exit 1\nfi\n\nPROFILE=\"${WINEPREFIX}/drive_c/users/${USER:-container}/Documents/My Games/FarmingSimulator2025\"\nmkdir -p \"${PROFILE}/mods\"\nln -sfn \"${PROFILE}\" profile\n\nXML=game/dedicatedServer.xml\nif [ -f \"${XML}\" ]; then\n    # web interface on the primary allocation, game traffic on the second one\n    sed -i -E \\\n        -e \"s#(<webserver[^>]*port=\\\")[0-9]+#\\1${SERVER_PORT}#\" \\\n        -e \"s#<port>[0-9]+</port>#<port>${GAME_PORT}</port>#\" \\\n        -e \"s#<username>[^<]*</username>#<username>${WEB_USER}</username>#\" \\\n        -e \"s#<passphrase>[^<]*</passphrase>#<passphrase>${WEB_PASSWORD}</passphrase>#\" \\\n        \"${XML}\"\nelse\n    echo \"game/dedicatedServer.xml is missing, the web interface will use its defaults.\"\nfi\n\ncd game\nwine dedicatedServer.exe > ../logs/dedicatedServer.log 2>&1 &\nSERVER_PID=$!\necho \"dedicatedServer.exe started, web interface on port ${SERVER_PORT}\"\ntouch \"${PROFILE}/log.txt\"\ntail -n0 -F \"${PROFILE}/log.txt\" ../logs/dedicatedServer.log --pid=${SERVER_PID}\nEOF\nchmod 755 start.sh\n\necho \"-----------------------------------------\"\necho \"Prepared. Upload the installed game into game/ before starting.\"\necho \"-----------------------------------------\"",
+            "container": "ghcr.io/pelican-eggs/installers:debian",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Game Port",
+            "description": "Port players connect to. Must be an additional allocation (TCP + UDP).",
+            "env_variable": "GAME_PORT",
+            "default_value": "10823",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|integer|between:1024,65535",
+            "field_type": "text"
+        },
+        {
+            "name": "Web Admin User",
+            "description": "Login for the dedicated server web interface.",
+            "env_variable": "WEB_USER",
+            "default_value": "admin",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|regex:/^[A-Za-z0-9_\\-]+$/|max:32",
+            "field_type": "text"
+        },
+        {
+            "name": "Web Admin Password",
+            "description": "Password for the web interface.",
+            "env_variable": "WEB_PASSWORD",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|regex:/^[A-Za-z0-9_\\-!.@]+$/|min:10|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Winetricks",
+            "description": "Space separated winetricks verbs installed on start.",
+            "env_variable": "WINETRICKS_RUN",
+            "default_value": "vcrun2022 d3dcompiler_47",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Wine Debug",
+            "description": "",
+            "env_variable": "WINEDEBUG",
+            "default_value": "-all",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        }
+    ]
+}

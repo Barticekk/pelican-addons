@@ -1,0 +1,252 @@
+_comment: 'DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PANEL'
+meta:
+  version: PLCN_v3
+  update_url: null
+exported_at: '2026-11-02T12:00:00+00:00'
+name: 'Open WebUI + Ollama'
+author: barticekk@barticekk.eu
+uuid: 47ffd19a-8620-48fb-9784-a15be2050ae8
+description: |-
+  Self-hosted AI chat. Open WebUI provides the ChatGPT-like interface with user accounts, Ollama runs
+  local models next to it inside the same server and is only reachable from inside the container.
+  Can also connect to an external Ollama or OpenAI-compatible API instead.
+icon: null
+tags:
+  - ai
+features: {  }
+docker_images:
+  'Python 3.12': 'ghcr.io/pelican-eggs/yolks:python_3.12'
+file_denylist: {  }
+startup_commands:
+  Default: 'if [ ! -f start.sh ]; then echo "start.sh is missing: the installation did not finish. Reinstall the server and check the install output for the line starting with Install failed."; exit 1; fi; bash ./start.sh'
+config:
+  files: {  }
+  startup:
+    done: 'Open WebUI is ready on port'
+  logs: {  }
+  stop: ^C
+scripts:
+  installation:
+    script: |-
+      #!/bin/bash
+      # Open WebUI + Ollama install script
+      #
+      # Server Files: /mnt/server
+      # Only Ollama is fetched here. Open WebUI is pip-installed on the first start inside the runtime
+      # image, where the server's own RAM and disk apply and the progress shows in the console.
+      set -eo pipefail
+      trap 'echo "Install failed at line ${LINENO}: ${BASH_COMMAND}"; echo "Check free disk space and network access to ollama.com and github.com."' ERR
+
+      apt-get update
+      apt-get install -y --no-install-recommends curl ca-certificates zstd
+
+      case "$(uname -m)" in
+          x86_64) ARCH=amd64 ;;
+          aarch64) ARCH=arm64 ;;
+          *) echo "Unsupported architecture $(uname -m)"; exit 1 ;;
+      esac
+
+      cd /mnt/server
+      mkdir -p data logs models
+
+      if [ "${BUNDLED_OLLAMA}" == "1" ]; then
+          echo "Installing Ollama"
+          EXCLUDES=()
+          if [ "${OLLAMA_GPU_LIBS}" != "1" ]; then
+              # containers on a panel node have no GPU, skip about 2.3 GB of CUDA and Vulkan runners
+              EXCLUDES=(--exclude='lib/ollama/cuda_*' --exclude='lib/ollama/rocm*' --exclude='lib/ollama/vulkan')
+          fi
+          rm -rf ollama
+          mkdir -p ollama
+          curl -fsSL "https://ollama.com/download/ollama-linux-${ARCH}.tar.zst" | tar -I zstd -x -C ollama "${EXCLUDES[@]}"
+          ./ollama/bin/ollama --version 2>/dev/null || true
+      fi
+
+      # a reinstall forces Open WebUI to be installed again on the next start
+      rm -f venv/.installed-version
+
+      cat > start.sh <<'EOF'
+      #!/bin/bash
+      cd /home/container
+
+      VENV=/home/container/venv
+      WANT=${WEBUI_VERSION:-latest}
+
+      install_webui() {
+          echo "-----------------------------------------"
+          echo "Installing Open WebUI (${WANT}). The first start takes 5-15 minutes."
+          echo "-----------------------------------------"
+          # /tmp is a small tmpfs on panel nodes and the torch wheel alone is over 200 MB
+          export TMPDIR=/home/container/.pip-tmp
+          mkdir -p "${TMPDIR}"
+          # a venv left over from an older version of this egg may point at /mnt/server
+          if [ -d "${VENV}" ] && ! head -n1 "${VENV}/bin/pip" 2>/dev/null | grep -q "^#!${VENV}/bin/python"; then
+              echo "Removing an unusable virtualenv"
+              rm -rf "${VENV}"
+          fi
+          if [ ! -x "${VENV}/bin/python" ]; then
+              python3 -m venv "${VENV}" || return 1
+          fi
+          "${VENV}/bin/pip" install --no-cache-dir --progress-bar off --upgrade pip || return 1
+          if [ "$(uname -m)" == "x86_64" ]; then
+              # CPU wheels of torch; the default ones pull several GB of CUDA libraries
+              "${VENV}/bin/pip" install --no-cache-dir --progress-bar off torch --index-url https://download.pytorch.org/whl/cpu || return 1
+          fi
+          if [ "${WANT}" == "latest" ]; then
+              "${VENV}/bin/pip" install --no-cache-dir --progress-bar off --upgrade open-webui || return 1
+          else
+              "${VENV}/bin/pip" install --no-cache-dir --progress-bar off "open-webui==${WANT}" || return 1
+          fi
+          rm -rf "${TMPDIR}"
+          echo "${WANT}" > "${VENV}/.installed-version"
+          echo "Open WebUI $("${VENV}/bin/pip" show open-webui | awk '/^Version/ {print $2}') installed"
+      }
+
+      if [ ! -x "${VENV}/bin/open-webui" ] || [ "$(cat "${VENV}/.installed-version" 2>/dev/null)" != "${WANT}" ]; then
+          if ! install_webui; then
+              echo "Installing Open WebUI failed, see the pip output above."
+              echo "Usual causes: not enough disk space (needs about 4 GiB free) or no access to pypi.org / download.pytorch.org."
+              exit 1
+          fi
+      fi
+
+      export DATA_DIR=/home/container/data
+      export HF_HOME=/home/container/data/cache/huggingface
+      export WEBUI_URL="${WEBUI_URL}"
+      export ENABLE_SIGNUP="${ENABLE_SIGNUP}"
+      export SCARF_NO_ANALYTICS=true DO_NOT_TRACK=true ANONYMIZED_TELEMETRY=false
+
+      if [ "${BUNDLED_OLLAMA}" == "1" ] && [ -x ollama/bin/ollama ]; then
+          export OLLAMA_HOST=127.0.0.1:11434
+          export OLLAMA_MODELS=/home/container/models
+          export OLLAMA_BASE_URL=http://127.0.0.1:11434
+          echo "Starting Ollama (log: logs/ollama.log)"
+          ./ollama/bin/ollama serve >> logs/ollama.log 2>&1 &
+          for _ in $(seq 1 30); do
+              curl -fs http://127.0.0.1:11434/api/version > /dev/null && break
+              sleep 1
+          done
+          if [ -n "${OLLAMA_PULL_MODELS}" ]; then
+              (
+                  for model in ${OLLAMA_PULL_MODELS//,/ }; do
+                      echo "Pulling model ${model} in the background"
+                      for attempt in 1 2 3; do
+                          if ./ollama/bin/ollama pull "${model}" >> logs/ollama.log 2>&1; then
+                              echo "Model ${model} ready"
+                              break
+                          fi
+                          [ "${attempt}" == "3" ] && echo "Pulling ${model} failed, see logs/ollama.log"
+                          sleep 10
+                      done
+                  done
+              ) &
+          fi
+      elif [ "${BUNDLED_OLLAMA}" == "1" ]; then
+          echo "Bundled Ollama is on but ollama/ is missing. Reinstall the server to download it."
+          export ENABLE_OLLAMA_API=false
+      elif [ -n "${OLLAMA_URL}" ]; then
+          export OLLAMA_BASE_URL="${OLLAMA_URL}"
+      else
+          export ENABLE_OLLAMA_API=false
+      fi
+
+      if [ -n "${WEBUI_URL}" ]; then
+          export CORS_ALLOW_ORIGIN="${WEBUI_URL}"
+      fi
+
+      # uvicorn's own startup lines are swallowed by Open WebUI's logging, so announce readiness here
+      (
+          until curl -fs "http://127.0.0.1:${SERVER_PORT}/health" > /dev/null; do
+              sleep 3
+          done
+          echo "Open WebUI is ready on port ${SERVER_PORT}"
+      ) &
+
+      exec "${VENV}/bin/open-webui" serve --host 0.0.0.0 --port "${SERVER_PORT}"
+      EOF
+      chmod 755 start.sh
+
+      echo "-----------------------------------------"
+      echo "Install finished. Open WebUI itself is installed on the first start (watch the console)."
+      echo "-----------------------------------------"
+    container: 'ghcr.io/pelican-eggs/installers:debian'
+    entrypoint: bash
+variables:
+  -
+    sort: 1
+    name: 'Public URL'
+    description: 'Address users open, e.g. https://ai.example.com. Used for links and OAuth.'
+    env_variable: WEBUI_URL
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - url
+  -
+    sort: 2
+    name: 'Allow Signups'
+    description: 'The first account becomes admin. Later signups wait for admin approval; set false to close registration completely.'
+    env_variable: ENABLE_SIGNUP
+    default_value: 'true'
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - string
+      - 'in:true,false'
+  -
+    sort: 3
+    name: 'Bundled Ollama'
+    description: 'Run Ollama inside this server (only reachable from the container). Turn off to use an external Ollama URL. Reinstall after changing.'
+    env_variable: BUNDLED_OLLAMA
+    default_value: 1
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - boolean
+  -
+    sort: 4
+    name: 'Models To Pull'
+    description: 'Comma separated Ollama models downloaded on start if missing, e.g. llama3.2:3b,qwen2.5:1.5b. Needs RAM roughly equal to the model size.'
+    env_variable: OLLAMA_PULL_MODELS
+    default_value: 'llama3.2:1b'
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - 'regex:/^[A-Za-z0-9._:\/\-]+(,[A-Za-z0-9._:\/\-]+)*$/'
+  -
+    sort: 5
+    name: 'External Ollama URL'
+    description: 'Used when Bundled Ollama is off, e.g. http://10.0.0.5:11434'
+    env_variable: OLLAMA_URL
+    default_value: ''
+    user_viewable: true
+    user_editable: true
+    rules:
+      - nullable
+      - url
+  -
+    sort: 6
+    name: 'Ollama GPU Libraries'
+    description: 'Also install the CUDA/Vulkan runners (about 2.3 GB). Only useful when the node passes a GPU into containers.'
+    env_variable: OLLAMA_GPU_LIBS
+    default_value: 0
+    user_viewable: true
+    user_editable: false
+    rules:
+      - required
+      - boolean
+  -
+    sort: 7
+    name: 'Open WebUI Version'
+    description: 'latest or a release such as 0.12.5. Changing it reinstalls Open WebUI on the next start; Reinstall also updates latest. data/ and models/ are kept.'
+    env_variable: WEBUI_VERSION
+    default_value: latest
+    user_viewable: true
+    user_editable: true
+    rules:
+      - required
+      - 'regex:/^(latest|[0-9]+\.[0-9]+\.[0-9]+)$/'
