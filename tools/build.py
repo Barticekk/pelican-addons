@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export every Pelican egg (egg-*.yaml, PLCN_v3) in this tree to Pterodactyl's PTDL_v2 JSON.
+"""Export every Pelican egg (eggs/**/egg-*.yaml, PLCN_v3) to Pterodactyl's PTDL_v2 JSON.
 
 The YAML files are the source of truth. Run after editing one:
 
@@ -16,6 +16,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
+EGGS = ROOT / "eggs"
 REQUIRED = ("name", "author", "uuid", "description", "docker_images", "startup_commands", "config", "scripts", "variables")
 ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
@@ -112,7 +113,7 @@ def main():
     parser.add_argument("--check", action="store_true", help="validate only")
     args = parser.parse_args()
 
-    eggs = sorted(p for p in ROOT.rglob("egg-*.yaml") if "tools" not in p.parts)
+    eggs = sorted(EGGS.rglob("egg-*.yaml"))
     issues = []
     for path in eggs:
         egg = yaml.safe_load(path.read_text(encoding="utf-8"))
